@@ -355,6 +355,16 @@ namespace PVZF_Launcher
                 UnpackNewtonsoft(targetDir);
                 UnpackStaticResources(targetDir);
 
+                string updatePath = Path.Combine(targetDir, "PVZF_Launcher_Update.exe");
+                try
+                {
+                    if (File.Exists(updatePath))
+                        File.Delete(updatePath);
+                }
+                catch
+                {}
+
+
                 CheckAndLaunchGitHubUpdate(targetDir, targetExe);
                 return;
             }

@@ -168,6 +168,10 @@ namespace PVZF_Launcher
             this.btnPatch = new Button();
             this.btnLaunch = new Button();
             this.btnQuit = new Button();
+            this.DoubleBuffered = true;
+            this.SetStyle(ControlStyles.OptimizedDoubleBuffer, true);
+            this.SetStyle(ControlStyles.AllPaintingInWmPaint, true);
+            this.SetStyle(ControlStyles.UserPaint, true);
 
             this.SuspendLayout();
 
@@ -614,6 +618,12 @@ namespace PVZF_Launcher
             }
         }
 
+        bool RequiresNet6(string versionString)
+        {
+            Version v = new Version(versionString);
+            return v >= new Version("3.1.1");
+        }
+
         private void CreateNewInstallationFromLocalZip(
             string version,
             string loader,
@@ -731,20 +741,22 @@ namespace PVZF_Launcher
 
                     if (languageChanged)
                     {
-                        if (
-                            string.IsNullOrEmpty(selectedNet6Zip)
-                            || !IsValidNet6Zip(selectedNet6Zip)
-                        )
+                        if (RequiresNet6(version))
                         {
-                            MessageBox.Show(
-                                "net6.zip is missing or invalid.\nCannot install Translation Mod support.",
-                                "Translation Mod Error",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Error
-                            );
-                            return;
+                            if (
+                                string.IsNullOrEmpty(selectedNet6Zip)
+                                || !IsValidNet6Zip(selectedNet6Zip)
+                            )
+                            {
+                                MessageBox.Show(
+                                    "net6.zip is missing or invalid.\nCannot install Translation Mod support.",
+                                    "Translation Mod Error",
+                                    MessageBoxButtons.OK,
+                                    MessageBoxIcon.Error
+                                );
+                                return;
+                            }
                         }
-
                         if (
                             string.IsNullOrEmpty(selectedTranslationZip)
                             || !IsValidTranslationModZip(selectedTranslationZip)
@@ -758,8 +770,10 @@ namespace PVZF_Launcher
                             );
                             return;
                         }
-
-                        InstallNet6(selectedNet6Zip, installPath);
+                        if (RequiresNet6(version))
+                        {
+                            InstallNet6(selectedNet6Zip, installPath);
+                        }
                         InstallTranslationMod(selectedTranslationZip, installPath);
                     }
                 }
@@ -1098,6 +1112,7 @@ namespace PVZF_Launcher
 
         private void ShowInlineEditor(InstallationInfo inst)
         {
+            this.SuspendLayout();
             this.Controls.Clear();
 
             var title = new Label
@@ -1197,6 +1212,7 @@ namespace PVZF_Launcher
             };
             StyleButton(btnSave);
             btnSave.BackColor = Color.Green;
+            this.ResumeLayout(false);
 
             btnSave.Click += (s, e) =>
             {
@@ -1268,6 +1284,7 @@ namespace PVZF_Launcher
 
         private void ShowInstallationManager()
         {
+            this.SuspendLayout();
             this.Controls.Clear();
 
             var title = new Label
@@ -1485,6 +1502,7 @@ namespace PVZF_Launcher
                 Location = new Point(this.ClientSize.Width - 220, this.ClientSize.Height - 80)
             };
             StyleButton(back);
+            this.ResumeLayout(false);
 
             back.Click += (s, e) =>
             {
@@ -1492,9 +1510,9 @@ namespace PVZF_Launcher
             };
             this.Controls.Add(back);
         }
-
         private void ShowCreateInstallationMenu(bool openedFromMainMenu)
         {
+            this.SuspendLayout();
             this.Controls.Clear();
             var store = LoadInstallationStore();
 
@@ -1613,134 +1631,148 @@ namespace PVZF_Launcher
                 if (lang == "Chinese")
                     return;
 
-                DialogResult confirm = MessageBox.Show(
-                    "To use this language, you must download and install the Translation Mod.\n\n" +
-                    "IMPORTANT!! FIND YOUR VERSION IN RELEASES\n" +
-                    "LOOK FOR THE FOLLOWING:\n" +
-                    "'Manual MelonLoader Installation Walkthrough'\n" +
-                    "SKIP STEP 1 AND STEP 2\n" +
-                    "SKIP STEPS WITH 'Extract' \n\n" +
-                    "Would you like to continue?",
-
-                    "Translation Mod Required",
-                    MessageBoxButtons.OKCancel,
-                    MessageBoxIcon.Information
-                );
-
-                if (confirm == DialogResult.Cancel)
-                {
-                    languageBox.SelectedIndex = 0;
-                    MessageBox.Show("Defaulting language.");
+                if (versionBox.SelectedItem == null || versionBox.SelectedIndex == 0)
                     return;
-                }
 
-                DialogResult downloaded = MessageBox.Show(
-                    "Have you already downloaded the Translation Mod files?\n\n"
-                        + "You need BOTH:\n"
-                        + " • net6.zip\n"
-                        + " • PVZF-Translation.zip",
-                    "Translation Mod Download",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question
-                );
+                bool needsNet6 = RequiresNet6(versionBox.SelectedItem.ToString());
 
-                if (downloaded == DialogResult.No)
+                if (selectedTranslationZip == null)
                 {
-                    try
+                    DialogResult confirm = MessageBox.Show(
+                        "To use this language, you must download and install the Translation Mod.\n\n"
+                            + "IMPORTANT!! FIND YOUR VERSION IN RELEASES\n"
+                            + "LOOK FOR THE FOLLOWING:\n"
+                            + "'Manual MelonLoader Installation Walkthrough'\n"
+                            + "SKIP STEP 1 AND STEP 2\n"
+                            + "SKIP STEPS WITH 'Extract' \n\n"
+                            + "Would you like to continue?",
+                        "Translation Mod Required",
+                        MessageBoxButtons.OKCancel,
+                        MessageBoxIcon.Information
+                    );
+
+                    if (confirm == DialogResult.Cancel)
                     {
-                        Process.Start(
-                            new ProcessStartInfo
+                        languageBox.SelectedIndex = 0;
+                        MessageBox.Show("Defaulting language.");
+                        return;
+                    }
+
+                    DialogResult downloaded = MessageBox.Show(
+                        needsNet6
+                          ? "Have you already downloaded the Translation Mod files?\n\nYou need BOTH:\n • net6.zip\n • PVZF-Translation.zip"
+                          : "Have you already downloaded the Translation Mod files?\n\nYou need:\n • PVZF-Translation.zip",
+                        "Translation Mod Download",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question
+                    );
+
+                    if (downloaded == DialogResult.No)
+                    {
+                        try
+                        {
+                            Process.Start(
+                                new ProcessStartInfo
+                                {
+                                    FileName =
+                                        "https://github.com/Teyliu/PVZF-Translation/releases",
+                                    UseShellExecute = true
+                                }
+                            );
+                        }
+                        catch
+                        {
+                            MessageBox.Show("Unable to open the Translation Mod release page.");
+                        }
+                    }
+
+                    DialogResult selectFiles = MessageBox.Show(
+                        needsNet6
+                          ? "You will now be asked to select the required files\n\nFirst: net6.zip\nThen: PVZF-Translation.zip"
+                          : "You will now be asked to select the required file\n\nPVZF-Translation.zip",
+                        "File Selection",
+                        MessageBoxButtons.OKCancel,
+                        MessageBoxIcon.Information
+                    );
+
+                    if (selectFiles == DialogResult.Cancel)
+                    {
+                        languageBox.SelectedIndex = 0;
+                        MessageBox.Show("Defaulting language.");
+                        return;
+                    }
+
+                    if (needsNet6)
+                    {
+                        while (true)
+                        {
+                            using (OpenFileDialog dialog = new OpenFileDialog())
                             {
-                                FileName = "https://github.com/Teyliu/PVZF-Translation/releases",
-                                UseShellExecute = true
+                                dialog.Title = "Select net6.zip";
+                                dialog.Filter = "ZIP Files (*.zip)|*.zip";
+
+                                if (dialog.ShowDialog() != DialogResult.OK)
+                                {
+                                    languageBox.SelectedIndex = 0;
+                                    MessageBox.Show("Defaulting language.");
+                                    return;
+                                }
+
+                                string net6Zip = dialog.FileName;
+
+                                if (IsValidNet6Zip(net6Zip))
+                                {
+                                    selectedNet6Zip = net6Zip;
+                                    break;
+                                }
+
+                                MessageBox.Show(
+                                    "Invalid net6.zip.\nCould not find Il2CppInterop.Common.dll inside a folder named 'net6'.",
+                                    "Invalid net6.zip",
+                                    MessageBoxButtons.OK,
+                                    MessageBoxIcon.Warning
+                                );
                             }
-                        );
+                        }
                     }
-                    catch
+                    else
                     {
-                        MessageBox.Show("Unable to open the Translation Mod release page.");
+                        selectedNet6Zip = null;
                     }
-                }
 
-                DialogResult selectFiles = MessageBox.Show(
-                    "You will now be asked to select the required files.\n\n"
-                        + "First: net6.zip\n"
-                        + "Then: PVZF-Translation.zip",
-                    "File Selection",
-                    MessageBoxButtons.OKCancel,
-                    MessageBoxIcon.Information
-                );
-
-                if (selectFiles == DialogResult.Cancel)
-                {
-                    languageBox.SelectedIndex = 0;
-                    MessageBox.Show("Defaulting language.");
-                    return;
-                }
-
-                while (true)
-                {
-                    using (OpenFileDialog dialog = new OpenFileDialog())
+                    while (true)
                     {
-                        dialog.Title = "Select net6.zip";
-                        dialog.Filter = "ZIP Files (*.zip)|*.zip";
-
-                        if (dialog.ShowDialog() != DialogResult.OK)
+                        using (OpenFileDialog dialog = new OpenFileDialog())
                         {
-                            languageBox.SelectedIndex = 0;
-                            MessageBox.Show("Defaulting language.");
-                            return;
+                            dialog.Title = "Select TranslationMod.zip";
+                            dialog.Filter = "ZIP Files (*.zip)|*.zip";
+
+                            if (dialog.ShowDialog() != DialogResult.OK)
+                            {
+                                languageBox.SelectedIndex = 0;
+                                MessageBox.Show("Defaulting language.");
+                                return;
+                            }
+
+                            string translationZip = dialog.FileName;
+
+                            if (IsValidTranslationModZip(translationZip))
+                            {
+                                selectedTranslationZip = translationZip;
+                                break;
+                            }
+
+                            MessageBox.Show(
+                                "Invalid TranslationMod.zip.\nCould not find PvZ_Fusion_Translator.dll.",
+                                "Invalid TranslationMod.zip",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Warning
+                            );
                         }
-
-                        string net6Zip = dialog.FileName;
-
-                        if (IsValidNet6Zip(net6Zip))
-                        {
-                            selectedNet6Zip = net6Zip;
-                            break;
-                        }
-
-                        MessageBox.Show(
-                            "Invalid net6.zip.\nCould not find Il2CppInterop.Common.dll inside a folder named 'net6'.",
-                            "Invalid net6.zip",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Warning
-                        );
                     }
+
+                    MessageBox.Show("Translation Mod files selected successfully.");
                 }
-
-                while (true)
-                {
-                    using (OpenFileDialog dialog = new OpenFileDialog())
-                    {
-                        dialog.Title = "Select TranslationMod.zip";
-                        dialog.Filter = "ZIP Files (*.zip)|*.zip";
-
-                        if (dialog.ShowDialog() != DialogResult.OK)
-                        {
-                            languageBox.SelectedIndex = 0;
-                            MessageBox.Show("Defaulting language.");
-                            return;
-                        }
-
-                        string translationZip = dialog.FileName;
-
-                        if (IsValidTranslationModZip(translationZip))
-                        {
-                            selectedTranslationZip = translationZip;
-                            break;
-                        }
-
-                        MessageBox.Show(
-                            "Invalid TranslationMod.zip.\nCould not find PvZ_Fusion_Translator.dll.",
-                            "Invalid TranslationMod.zip",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Warning
-                        );
-                    }
-                }
-
-                MessageBox.Show("Translation Mod files selected successfully.");
             };
 
             loaderBox.SelectedIndexChanged += delegate
@@ -1785,6 +1817,9 @@ namespace PVZF_Launcher
 
             versionBox.SelectedIndexChanged += delegate
             {
+                selectedTranslationZip = null;
+                selectedNet6Zip = null;
+
                 if (versionBox.SelectedItem == null || versionBox.SelectedIndex == 0)
                 {
                     loaderBox.Visible = false;
@@ -1809,7 +1844,9 @@ namespace PVZF_Launcher
                 if (confirm == DialogResult.Cancel)
                 {
                     DialogResult local = MessageBox.Show(
-                        "Would you like to select an already downloaded " + selectedVersion + ".ZIP instead?",
+                        "Would you like to select an already downloaded "
+                            + selectedVersion
+                            + ".ZIP instead?",
                         "Select Local ZIP",
                         MessageBoxButtons.YesNo,
                         MessageBoxIcon.Question
@@ -1876,7 +1913,7 @@ namespace PVZF_Launcher
                 string version = versionBox.SelectedItem.ToString();
                 string loader = loaderBox.SelectedItem.ToString();
                 string language = languageMap[languageBox.SelectedItem.ToString()];
-            
+
                 if (version == "<Select Version>")
                 {
                     MessageBox.Show("Please select a version to install");
@@ -1933,6 +1970,7 @@ namespace PVZF_Launcher
                     this.ClientSize.Height - 80
                 );
                 StyleButton(addExistingBtn);
+                this.ResumeLayout(false);
 
                 addExistingBtn.Click += delegate
                 {
@@ -1972,6 +2010,7 @@ namespace PVZF_Launcher
         {
             string selected = currentDirectory;
 
+            this.SuspendLayout();
             this.Controls.Clear();
             InitializeComponent();
             LoadInstallPaths();
@@ -1993,6 +2032,7 @@ namespace PVZF_Launcher
 
             UpdateBrowseButtonText();
             UpdatePatchButtonState();
+            this.ResumeLayout(false);
         }
 
         private void btnPatch_Click(object sender, EventArgs e)
