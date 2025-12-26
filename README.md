@@ -102,6 +102,10 @@ If you want to help improve the launcher — translations, UI improvements, bug 
 ---
 
 ## ❤️ Credits
-PVZ Fusion Created by LanPiaoPiao
+
+PVZ Fusion Created by LanPiaoPiao and his team
+Original Developers of Game [Link to Bilibili](https://space.bilibili.com/3546619314178489
+
+The wonderful people that collectively built [PVZF-Translation](https://github.com/Teyliu/PVZF-Translation/blob/main/README.md?plain=1#L118)
 
 Download Mirrors by @leo.tai_0325 discord
