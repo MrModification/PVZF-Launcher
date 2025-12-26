@@ -1,0 +1,17 @@
+{
+  "RootPath": "%Documents%/PlantsVsZombiesFusionInstalls",
+  "Versions": [
+    {
+      "Version": "3.2.1",
+      "DownloadUrl": "https://drive.usercontent.google.com/download?id=1kLMln-z_EFrGVv96729B2xMqBOl51MnX&export=download"
+    },
+    {
+      "Version": "3.1.1",
+      "DownloadUrl": "https://drive.usercontent.google.com/download?id=1ijPum6sPics1iLGgSjJOMBwgRq9GUunL&export=download"
+    },
+    {
+      "Version": "3.0.1",
+      "DownloadUrl": "https://drive.usercontent.google.com/download?id=1v_0rK4ObsLmfXpW5fBFvaaz3vaD5TGEr&export=download"
+    }
+  ]
+}
