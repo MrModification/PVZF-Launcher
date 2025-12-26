@@ -285,35 +285,51 @@ namespace PVZF_Launcher
         {
             Splash splash = new Splash("Checking for updates...");
             splash.Show();
+            splash.Refresh();
+
             try
             {
                 var latest = GetLatestGitHubReleaseAsync().GetAwaiter().GetResult();
-                if (latest.version == null || string.IsNullOrEmpty(latest.downloadUrl))
-                    return;
-
                 Version running = GetFileVersion(targetExe);
 
-                if (latest.version <= running)
+                if (latest.version == null || string.IsNullOrEmpty(latest.downloadUrl))
+                {
+                    splash.Close();
                     return;
+                }
+
+                if (latest.version <= running)
+                {
+                    splash.Close();
+                    return;
+                }
+
+                splash.UpdateMessage("Downloading update...");
+                splash.Refresh();
 
                 string updatePath = Path.Combine(targetDir, "PVZF_Launcher_Update.exe");
 
                 using (var client = new HttpClient())
                 {
-                    var data = client
-                        .GetByteArrayAsync(latest.downloadUrl)
-                        .GetAwaiter()
-                        .GetResult();
+                    var data = client.GetByteArrayAsync(latest.downloadUrl)
+                                     .GetAwaiter().GetResult();
                     File.WriteAllBytes(updatePath, data);
                 }
+
                 splash.UpdateMessage("Launching updater...");
                 splash.Refresh();
+
+                splash.Close();
+
                 Process.Start(updatePath);
                 Environment.Exit(0);
             }
-            catch { }
-            splash.Close();
+            catch
+            {
+                splash.Close();
+            }
         }
+        
         private static void BootstrapSelf()
         {
             string exePath = Process.GetCurrentProcess().MainModule.FileName;
