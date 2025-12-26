@@ -16,7 +16,7 @@ The PvZ Fusion Launcher handles everything from file validation to mod loader in
 
 
 
-### 🚀 One‑Click Installation
+### 🚀 Easy Installation
 
 - Automatically detects last launced PvZF installation
 
@@ -24,7 +24,7 @@ The PvZ Fusion Launcher handles everything from file validation to mod loader in
 
 - Creates Desktop and Startmenu shortcuts
 
-- Prevents accidental Installs\\Downloads
+- _P in name to make portable / no-bootstrap
 
 
 
