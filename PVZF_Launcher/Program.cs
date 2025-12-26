@@ -283,6 +283,8 @@ namespace PVZF_Launcher
 
         private static void CheckAndLaunchGitHubUpdate(string targetDir, string targetExe)
         {
+            Splash splash = new Splash("Checking for updates...");
+            splash.Show();
             try
             {
                 var latest = GetLatestGitHubReleaseAsync().GetAwaiter().GetResult();
@@ -304,10 +306,13 @@ namespace PVZF_Launcher
                         .GetResult();
                     File.WriteAllBytes(updatePath, data);
                 }
+                splash.UpdateMessage("Launching updater...");
+                splash.Refresh();
                 Process.Start(updatePath);
                 Environment.Exit(0);
             }
             catch { }
+            splash.Close();
         }
         private static void BootstrapSelf()
         {
