@@ -48,7 +48,7 @@ The PvZ Fusion Launcher handles everything from file validation to mod loader in
 
 - Detects existing mod loaders
 
-- Ensures game instances installs cleanly.
+- Ensures game instances install cleanly.
 
 - Handles directory management and patch detection safely.
 
