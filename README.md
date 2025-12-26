@@ -103,4 +103,5 @@ If you want to help improve the launcher — translations, UI improvements, bug 
 
 ## ❤️ Credits
 PVZ Fusion Created by LanPiaoPiao
-Download Mirros by @leo.tai_0325 discord
+
+Download Mirrors by @leo.tai_0325 discord
