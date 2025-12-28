@@ -109,4 +109,6 @@ PVZ Fusion Created by LanPiaoPiao and his team
 
 The wonderful people that collectively built [PVZF-Translation](https://github.com/Teyliu/PVZF-Translation/blob/main/README.md?plain=1#L118)
 
+Net6 Binaries by [Cassidy](https://github.com/SillyStar-Github)
+
 Download Mirrors by @leo.tai_0325 discord
