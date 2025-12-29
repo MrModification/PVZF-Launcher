@@ -4,7 +4,7 @@ A user‑friendly launcher for **Plants vs. Zombies Fusion**, designed to make i
 
 
 
-The PvZ Fusion Launcher handles everything from file validation to mod loader integration, language selection, and automatic updates.
+The PvZ Fusion Launcher handles everything from file validation to mod loader integration, language selection, and modpack installation.
 
 
 
@@ -23,9 +23,6 @@ The PvZ Fusion Launcher handles everything from file validation to mod loader in
 - Auto update and Bootstrap (Installs to : AppData\\Local\\PVZF\_Launcher)
 
 - Creates Desktop and Startmenu shortcuts
-
-- _P in name to make portable / no-bootstrap
-
 
 
 ### 🔄 Automatic Updates
