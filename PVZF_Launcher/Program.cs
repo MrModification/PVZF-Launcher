@@ -281,6 +281,27 @@ namespace PVZF_Launcher
             }
         }
 
+        private static bool IsAutoUpdateEnabled()
+        {
+            try
+            {
+                string optionsPath = Path.Combine(ResourceDirectory, "Options.json");
+
+                if (!File.Exists(optionsPath))
+                    return true;
+
+                string json = File.ReadAllText(optionsPath);
+                JObject obj = JObject.Parse(json);
+
+                bool enabled = obj["AutoUpdate"]?.ToObject<bool>() ?? true;
+                return enabled;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
         private static void CheckAndLaunchGitHubUpdate(string targetDir, string targetExe)
         {
             Splash splash = new Splash("Checking for updates...");
@@ -311,8 +332,10 @@ namespace PVZF_Launcher
 
                 using (var client = new HttpClient())
                 {
-                    var data = client.GetByteArrayAsync(latest.downloadUrl)
-                                     .GetAwaiter().GetResult();
+                    var data = client
+                        .GetByteArrayAsync(latest.downloadUrl)
+                        .GetAwaiter()
+                        .GetResult();
                     File.WriteAllBytes(updatePath, data);
                 }
 
@@ -329,7 +352,7 @@ namespace PVZF_Launcher
                 splash.Close();
             }
         }
-        
+
         private static void BootstrapSelf()
         {
             string exePath = Process.GetCurrentProcess().MainModule.FileName;
@@ -361,11 +384,12 @@ namespace PVZF_Launcher
                     if (File.Exists(updatePath))
                         File.Delete(updatePath);
                 }
-                catch
-                {}
+                catch { }
 
-
-                CheckAndLaunchGitHubUpdate(targetDir, targetExe);
+                if (IsAutoUpdateEnabled())
+                {
+                    CheckAndLaunchGitHubUpdate(targetDir, targetExe);
+                }
                 return;
             }
 

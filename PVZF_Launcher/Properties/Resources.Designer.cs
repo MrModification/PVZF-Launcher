@@ -73,6 +73,16 @@ namespace PVZF_Launcher.Properties {
         /// <summary>
         ///   Looks up a localized resource of type System.Byte[].
         /// </summary>
+        internal static byte[] Back {
+            get {
+                object obj = ResourceManager.GetObject("Back", resourceCulture);
+                return ((byte[])(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
         internal static byte[] Background {
             get {
                 object obj = ResourceManager.GetObject("Background", resourceCulture);
@@ -81,11 +91,71 @@ namespace PVZF_Launcher.Properties {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to {&quot;RootPath&quot;:&quot;%Documents%/PlantsVsZombiesFusionInstalls&quot;,&quot;Versions&quot;:[{&quot;Version&quot;:&quot;3.2.1&quot;,&quot;DownloadUrl&quot;:&quot;https://drive.usercontent.google.com/download?id=1kLMln-z_EFrGVv96729B2xMqBOl51MnX&amp;export=download&quot;},{&quot;Version&quot;:&quot;3.1.1&quot;,&quot;DownloadUrl&quot;:&quot;https://drive.usercontent.google.com/download?id=1ijPum6sPics1iLGgSjJOMBwgRq9GUunL&amp;export=download&quot;},{&quot;Version&quot;:&quot;3.0.1&quot;,&quot;DownloadUrl&quot;:&quot;https://drive.usercontent.google.com/download?id=1v_0rK4ObsLmfXpW5fBFvaaz3vaD5TGEr&amp;export=download&quot;},{&quot;Version&quot;:&quot;2.8.2&quot;,&quot;DownloadUrl&quot;:&quot;https [rest of string was truncated]&quot;;.
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
+        internal static byte[] BrianneFont {
+            get {
+                object obj = ResourceManager.GetObject("BrianneFont", resourceCulture);
+                return ((byte[])(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
+        internal static byte[] CreateInstall {
+            get {
+                object obj = ResourceManager.GetObject("CreateInstall", resourceCulture);
+                return ((byte[])(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
+        internal static byte[] CreditPlant {
+            get {
+                object obj = ResourceManager.GetObject("CreditPlant", resourceCulture);
+                return ((byte[])(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
+        internal static byte[] Credits {
+            get {
+                object obj = ResourceManager.GetObject("Credits", resourceCulture);
+                return ((byte[])(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
+        internal static byte[] Discord {
+            get {
+                object obj = ResourceManager.GetObject("Discord", resourceCulture);
+                return ((byte[])(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to {&quot;RootPath&quot;:&quot;%Documents%/PlantsVsZombiesFusionInstalls&quot;,&quot;Versions&quot;:[{&quot;Version&quot;:&quot;3.2.1&quot;,&quot;DownloadUrl&quot;:&quot;https://github.com/MrModification/PVZF-Mirrors/releases/download/3.2.1/PC_PVZ-Fusion-3.2.1.zip&quot;,&quot;Net6DownloadUrl&quot;:&quot;https://github.com/SillyStar-Github/PvZ-Fusion-DRPC/releases/download/interop/net6.zip&quot;,&quot;TranslationModDownloadUrl&quot;:&quot;https://github.com/Teyliu/PVZF-Translation/archive/refs/heads/main.zip&quot;},{&quot;Version&quot;:&quot;3.1.1&quot;,&quot;DownloadUrl&quot;:&quot;https://github.com/MrModification/PVZF-Mirrors/releases/download/3.1.1/ [rest of string was truncated]&quot;;.
         /// </summary>
         internal static string InstallationStore {
             get {
                 return ResourceManager.GetString("InstallationStore", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
+        internal static byte[] Launch {
+            get {
+                object obj = ResourceManager.GetObject("Launch", resourceCulture);
+                return ((byte[])(obj));
             }
         }
         
@@ -102,9 +172,69 @@ namespace PVZF_Launcher.Properties {
         /// <summary>
         ///   Looks up a localized resource of type System.Byte[].
         /// </summary>
+        internal static byte[] ManageInstalls {
+            get {
+                object obj = ResourceManager.GetObject("ManageInstalls", resourceCulture);
+                return ((byte[])(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
+        internal static byte[] Menu {
+            get {
+                object obj = ResourceManager.GetObject("Menu", resourceCulture);
+                return ((byte[])(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
+        internal static byte[] MenuOverlay {
+            get {
+                object obj = ResourceManager.GetObject("MenuOverlay", resourceCulture);
+                return ((byte[])(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
+        internal static byte[] ModPacks {
+            get {
+                object obj = ResourceManager.GetObject("ModPacks", resourceCulture);
+                return ((byte[])(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
         internal static byte[] Newtonsoft_Json {
             get {
                 object obj = ResourceManager.GetObject("Newtonsoft_Json", resourceCulture);
+                return ((byte[])(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
+        internal static byte[] OptionPlant {
+            get {
+                object obj = ResourceManager.GetObject("OptionPlant", resourceCulture);
+                return ((byte[])(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
+        internal static byte[] Patch {
+            get {
+                object obj = ResourceManager.GetObject("Patch", resourceCulture);
                 return ((byte[])(obj));
             }
         }
@@ -125,6 +255,26 @@ namespace PVZF_Launcher.Properties {
         internal static byte[] PrePackedMelon {
             get {
                 object obj = ResourceManager.GetObject("PrePackedMelon", resourceCulture);
+                return ((byte[])(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
+        internal static byte[] QuitPlant {
+            get {
+                object obj = ResourceManager.GetObject("QuitPlant", resourceCulture);
+                return ((byte[])(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Byte[].
+        /// </summary>
+        internal static byte[] Unpatch {
+            get {
+                object obj = ResourceManager.GetObject("Unpatch", resourceCulture);
                 return ((byte[])(obj));
             }
         }

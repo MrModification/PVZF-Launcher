@@ -121,22 +121,67 @@
   <data name="app" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\app.ico;System.Drawing.Icon, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
+  <data name="Back" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\Back.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
   <data name="Background" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\Background.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </data>
+  <data name="BrianneFont" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\briannes_hand\Brianne_s_hand.ttf;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="CreateInstall" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\CreateInstall.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="CreditPlant" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\CreditPlant.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="Credits" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\Credits.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="Discord" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\Discord.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
   <data name="InstallationStore" xml:space="preserve">
-    <value>{"RootPath":"%Documents%/PlantsVsZombiesFusionInstalls","Versions":[{"Version":"3.2.1","DownloadUrl":"https://drive.usercontent.google.com/download?id=1kLMln-z_EFrGVv96729B2xMqBOl51MnX&amp;export=download"},{"Version":"3.1.1","DownloadUrl":"https://drive.usercontent.google.com/download?id=1ijPum6sPics1iLGgSjJOMBwgRq9GUunL&amp;export=download"},{"Version":"3.0.1","DownloadUrl":"https://drive.usercontent.google.com/download?id=1v_0rK4ObsLmfXpW5fBFvaaz3vaD5TGEr&amp;export=download"},{"Version":"2.8.2","DownloadUrl":"https://drive.usercontent.google.com/download?id=1G5xq0mIGaYj3W8Mqku2d3j--Au-qdkp8&amp;export=download"}]}</value>
+    <value>{"RootPath":"%Documents%/PlantsVsZombiesFusionInstalls","Versions":[{"Version":"3.2.1","DownloadUrl":"https://github.com/MrModification/PVZF-Mirrors/releases/download/3.2.1/PC_PVZ-Fusion-3.2.1.zip","Net6DownloadUrl":"https://github.com/SillyStar-Github/PvZ-Fusion-DRPC/releases/download/interop/net6.zip","TranslationModDownloadUrl":"https://github.com/Teyliu/PVZF-Translation/archive/refs/heads/main.zip"},{"Version":"3.1.1","DownloadUrl":"https://github.com/MrModification/PVZF-Mirrors/releases/download/3.1.1/PC_PVZ-Fusion-3.1.1.zip","Net6DownloadUrl":"https://github.com/SillyStar-Github/PvZ-Fusion-DRPC/releases/download/interop/net6.zip","TranslationModDownloadUrl":"https://github.com/Teyliu/PVZF-Translation/archive/refs/heads/main.zip"},{"Version":"3.0.1","DownloadUrl":"https://github.com/MrModification/PVZF-Mirrors/releases/download/3.0.1/PC_PVZ-Fusion-3.0.1.zip","TranslationModDownloadUrl":"https://github.com/Teyliu/PVZF-Translation/archive/refs/heads/main.zip"},{"Version":"2.8.2","DownloadUrl":"https://github.com/MrModification/PVZF-Mirrors/releases/download/2.8.2/PC_PVZ-Fusion-2.8.2.zip","TranslationModDownloadUrl":"https://github.com/Teyliu/PVZF-Translation/archive/refs/heads/main.zip"}]}</value>
+  </data>
+  <data name="Launch" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\Launch.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </data>
   <data name="Launcher_Music" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\Launcher_Music.wav;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </data>
+  <data name="ManageInstalls" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\ManageInstalls.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="Menu" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\Menu.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="MenuOverlay" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\MenuOverlay.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="ModPacks" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\ModPacks.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
   <data name="Newtonsoft_Json" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\Newtonsoft.Json.dll;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="OptionPlant" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\OptionPlant.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="Patch" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\Patch.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </data>
   <data name="PrePackedBep" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\BepInEx\PrePackedBep.zip;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </data>
   <data name="PrePackedMelon" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\MelonLoader\PrePackedMelon.zip;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="QuitPlant" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\QuitPlant.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </data>
+  <data name="Unpatch" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\Unpatch.png;System.Byte[], mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </data>
 </root>

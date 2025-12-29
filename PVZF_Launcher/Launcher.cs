@@ -1,35 +1,88 @@
 ﻿using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using PVZF_Launcher.Properties;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Drawing.Text;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
 using System.Windows.Forms;
+using System.Windows.Forms.VisualStyles;
 
 namespace PVZF_Launcher
 {
     public class Launcher : Form
     {
+        private ButtonCanvas canvas;
+
         private Label lblVersion;
         private Label lblDirectory;
-        private Button btnBrowse;
-        private Button btnPatch;
-        private Button btnLaunch;
-        private Button btnQuit;
 
         private Panel installPanel;
+        private Panel packPanel;
 
         private string currentDirectory = "";
 
         private string installListFile;
+
+        public class LauncherOptions
+        {
+            public string Language { get; set; } = "English";
+            public bool AutoUpdate { get; set; } = true;
+        }
+
+        private string GetOptionsPath()
+        {
+            string resDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PVZFL_Resources");
+            return Path.Combine(resDir, "Options.json");
+        }
+
+        private LauncherOptions LoadOptions()
+        {
+            string path = GetOptionsPath();
+
+            if (!File.Exists(path))
+                return new LauncherOptions();
+
+            try
+            {
+                string json = File.ReadAllText(path);
+                return JsonConvert.DeserializeObject<LauncherOptions>(json)
+                    ?? new LauncherOptions();
+            }
+            catch
+            {
+                return new LauncherOptions();
+            }
+        }
+
+        private void SaveOptions(LauncherOptions opts)
+        {
+            string path = GetOptionsPath();
+            string json = JsonConvert.SerializeObject(opts, Formatting.Indented);
+            File.WriteAllText(path, json);
+        }
+
+        public class ModPackInfo
+        {
+            public string Name { get; set; }
+            public string Creator { get; set; }
+            public string LoaderType { get; set; }
+            public string SourceFile { get; set; }
+            public List<string> InstalledFiles { get; set; } = new List<string>();
+        }
 
         private List<InstallationInfo> installPaths = new List<InstallationInfo>();
 
@@ -41,6 +94,7 @@ namespace PVZF_Launcher
             public bool IsPatched { get; set; }
             public DateTime LastPlayed { get; set; } = DateTime.MinValue;
             public string LoaderType { get; set; } = "MelonLoader";
+            public List<ModPackInfo> InstalledModpacks { get; set; } = new List<ModPackInfo>();
 
             private string _displayName;
 
@@ -66,6 +120,252 @@ namespace PVZF_Launcher
                     }
                 }
                 set { _displayName = value; }
+            }
+        }
+
+        public void SaveInstallationInfo(InstallationInfo inst)
+        {
+            string file = System.IO.Path.Combine(inst.Path, "InstallationInfo.json");
+            string json = Newtonsoft.Json.JsonConvert.SerializeObject(inst, Formatting.Indented);
+            File.WriteAllText(file, json);
+        }
+
+        public InstallationInfo LoadInstallationInfo(string path)
+        {
+            string file = System.IO.Path.Combine(path, "InstallationInfo.json");
+            if (!File.Exists(file))
+                return null;
+
+            string json = File.ReadAllText(file);
+            return Newtonsoft.Json.JsonConvert.DeserializeObject<InstallationInfo>(json);
+        }
+
+        public ModPackInfo ValidateModpack(string modpackPath, string loaderType)
+        {
+            if (!File.Exists(modpackPath))
+                throw new Exception("Modpack file does not exist.");
+
+            using (ZipArchive zip = ZipFile.OpenRead(modpackPath))
+            {
+                var modpackJsonEntry = zip.GetEntry("ModPack.json");
+                if (modpackJsonEntry == null)
+                    throw new Exception("ModPack.json is missing from the modpack.");
+
+                bool hasGameDirectory = zip.Entries.Any(
+                    e => e.FullName.StartsWith("GameDirectory/", StringComparison.OrdinalIgnoreCase)
+                );
+
+                if (!hasGameDirectory)
+                    throw new Exception("GameDirectory folder is missing from the modpack.");
+
+                bool hasMelonMods = zip.Entries.Any(
+                    e =>
+                        e.FullName.StartsWith(
+                            "GameDirectory/Mods/",
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                );
+
+                bool hasBepInEx = zip.Entries.Any(
+                    e =>
+                        e.FullName.StartsWith(
+                            "GameDirectory/BepInEx/",
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                );
+
+                string detectedLoader = null;
+
+                if (hasMelonMods)
+                    detectedLoader = "MelonLoader";
+
+                if (hasBepInEx)
+                    detectedLoader = "BepInEx";
+
+                if (detectedLoader == null)
+                    throw new Exception(
+                        "Modpack must contain either GameDirectory/Mods/ or GameDirectory/BepInEx/."
+                    );
+
+                if (!string.Equals(detectedLoader, loaderType, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new Exception(
+                        $"This modpack is for {detectedLoader}, but this installation uses {loaderType}."
+                    );
+                }
+
+                string jsonText;
+                using (var reader = new StreamReader(modpackJsonEntry.Open()))
+                    jsonText = reader.ReadToEnd();
+
+                JObject json = JObject.Parse(jsonText);
+
+                string name = json["name"]?.ToString();
+                string creator = json["creator"]?.ToString();
+
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(creator))
+                    throw new Exception("ModPack.json must contain 'name' and 'creator'.");
+
+                return new ModPackInfo
+                {
+                    Name = name,
+                    Creator = creator,
+                    LoaderType = loaderType,
+                    SourceFile = modpackPath
+                };
+            }
+        }
+
+        public List<string> GetModpackFileList(string modpackPath)
+        {
+            using (ZipArchive zip = ZipFile.OpenRead(modpackPath))
+            {
+                return zip.Entries
+                    .Where(e => !string.IsNullOrEmpty(e.Name))
+                    .Select(
+                        e =>
+                        {
+                            string path = e.FullName;
+
+                            if (path.Equals("ModPack.json", StringComparison.OrdinalIgnoreCase))
+                                return null;
+
+                            if (
+                                path.StartsWith(
+                                    "GameDirectory/",
+                                    StringComparison.OrdinalIgnoreCase
+                                )
+                            )
+                                path = path.Substring("GameDirectory/".Length);
+
+                            return path;
+                        }
+                    )
+                    .Where(p => p != null)
+                    .ToList();
+            }
+        }
+
+        public List<string> GetConflicts(InstallationInfo install, ModPackInfo newPack)
+        {
+            var conflicts = new List<string>();
+
+            foreach (var existing in install.InstalledModpacks)
+            {
+                var overlap = existing.InstalledFiles.Intersect(
+                    newPack.InstalledFiles,
+                    StringComparer.OrdinalIgnoreCase
+                );
+
+                conflicts.AddRange(overlap);
+            }
+
+            return conflicts.Distinct().ToList();
+        }
+
+        public void InstallModpack(InstallationInfo inst, ModPackInfo pack)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "modpack_extract_" + Guid.NewGuid());
+            Directory.CreateDirectory(tempDir);
+
+            ZipFile.ExtractToDirectory(pack.SourceFile, tempDir);
+
+            foreach (var file in pack.InstalledFiles)
+            {
+                string src = Path.Combine(tempDir, "GameDirectory", file);
+                string dst = Path.Combine(inst.Path, file);
+
+                Directory.CreateDirectory(Path.GetDirectoryName(dst));
+                File.Copy(src, dst, true);
+            }
+
+            inst.InstalledModpacks.Add(pack);
+            inst.ModCount = inst.InstalledModpacks.Count;
+
+            SaveInstallationInfo(inst);
+
+            Directory.Delete(tempDir, true);
+        }
+
+        public void UninstallModpack(InstallationInfo inst, ModPackInfo pack)
+        {
+            string baseDir = inst.Path;
+
+            if (inst.LoaderType == "MelonLoader")
+            {
+                string disabled = Path.Combine(inst.Path, "_DISABLED_MELONLOADER");
+                if (Directory.Exists(disabled))
+                    baseDir = disabled;
+            }
+            else if (inst.LoaderType == "BepInEx")
+            {
+                string disabled = Path.Combine(inst.Path, "_DISABLED_BEPINEX");
+                if (Directory.Exists(disabled))
+                    baseDir = disabled;
+            }
+
+            var protectedFiles = inst.InstalledModpacks
+                .Where(p => p != pack)
+                .SelectMany(p => p.InstalledFiles)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var file in pack.InstalledFiles)
+            {
+                if (protectedFiles.Contains(file))
+                    continue;
+
+                string full = Path.Combine(baseDir, file);
+                if (File.Exists(full))
+                    File.Delete(full);
+            }
+
+            inst.InstalledModpacks.Remove(pack);
+            inst.ModCount = inst.InstalledModpacks.Count;
+
+            SaveInstallationInfo(inst);
+        }
+        private void AddModpackToInstallation(InstallationInfo inst)
+        {
+            using (OpenFileDialog dialog = new OpenFileDialog())
+            {
+                dialog.Title = "Select a Modpack";
+                dialog.Filter = "Modpacks (*.Modpack)|*.Modpack";
+
+                if (dialog.ShowDialog() != DialogResult.OK)
+                    return;
+
+                string modpackZip = dialog.FileName;
+
+                try
+                {
+                    ModPackInfo pack = ValidateModpack(modpackZip, inst.LoaderType);
+
+                    pack.InstalledFiles = GetModpackFileList(modpackZip);
+
+                    var conflicts = GetConflicts(inst, pack);
+                    if (conflicts.Count > 0)
+                    {
+                        string preview = string.Join("\n", conflicts.Take(20));
+                        MessageBox.Show(
+                            $"Warning: This modpack overwrites {conflicts.Count} files:\n\n{preview}",
+                            "Modpack Conflict",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning
+                        );
+                    }
+
+                    InstallModpack(inst, pack);
+
+                    SaveInstallationInfo(inst);
+
+                    MessageBox.Show($"Modpack '{pack.Name}' installed successfully!");
+
+                    ShowModpackManager(inst);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Failed to install modpack:\n" + ex.Message);
+                }
             }
         }
 
@@ -140,13 +440,295 @@ namespace PVZF_Launcher
                 this.BackgroundImage = null;
             }
         }
+        private static void UnpackButtonImage(string baseDir, string fileName, byte[] resourceBytes)
+        {
+            string resDir = EnsureResourceFolder(baseDir);
+            string imagePath = Path.Combine(resDir, fileName);
+
+            if (!File.Exists(imagePath))
+            {
+                using (
+                    var fs = new FileStream(
+                        imagePath,
+                        FileMode.Create,
+                        FileAccess.Write,
+                        FileShare.None
+                    )
+                )
+                {
+                    fs.Write(resourceBytes, 0, resourceBytes.Length);
+                    fs.Flush(true);
+                }
+            }
+        }
+
+        private Image LoadButtonFromFile(string fileName)
+        {
+            string path = Path.Combine(currentDirectory, "PVZFL_Resources", fileName);
+
+            for (int i = 0; i < 5; i++)
+            {
+                try
+                {
+                    if (File.Exists(path))
+                        return Image.FromFile(path);
+                    using (
+                        var fs = new FileStream(
+                            path,
+                            FileMode.Open,
+                            FileAccess.Read,
+                            FileShare.ReadWrite
+                        )
+                    )
+                    {
+                        return Image.FromStream(fs);
+                    }
+                }
+                catch
+                {
+                    Thread.Sleep(50);
+                }
+            }
+
+            return null;
+        }
+
+        private Image BytesToImage(byte[] bytes)
+        {
+            using (var ms = new MemoryStream(bytes))
+                return Image.FromStream(ms);
+        }
+
         private void LoadIcon()
         {
             this.Icon = Properties.Resources.app;
         }
+
+        public class ButtonCanvas : Control
+        {
+            private List<LauncherButton> buttons = new List<LauncherButton>();
+
+            public LauncherButton GetButton(string id)
+            {
+                return buttons.FirstOrDefault(b => b.Id == id);
+            }
+            public ButtonCanvas()
+            {
+                SetStyle(
+                    ControlStyles.AllPaintingInWmPaint
+                        | ControlStyles.UserPaint
+                        | ControlStyles.OptimizedDoubleBuffer
+                        | ControlStyles.SupportsTransparentBackColor,
+                    true
+                );
+
+                this.BackColor = Color.Transparent;
+            }
+
+            public void AddButton(LauncherButton btn)
+            {
+                buttons.Add(btn);
+                Invalidate();
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                foreach (var btn in buttons)
+                    btn.Draw(e.Graphics);
+            }
+
+            protected override void OnMouseMove(MouseEventArgs e)
+            {
+                foreach (var btn in buttons)
+                    btn.UpdateHover(e.Location);
+
+                Invalidate();
+            }
+
+            protected override void OnMouseClick(MouseEventArgs e)
+            {
+                foreach (var btn in buttons)
+                    btn.CheckClick(e.Location);
+            }
+        }
+
+        public class LauncherButton
+        {
+            public string Id;
+            public Image Image;
+            public Rectangle Bounds;
+            public bool Hover;
+            public Action OnClick;
+
+            public void Draw(Graphics g)
+            {
+                if (Image == null)
+                    return;
+
+                g.DrawImage(Image, Bounds);
+
+                if (Hover)
+                {
+                    using (Bitmap bmp = new Bitmap(Image))
+                    {
+                        for (int y = 0; y < bmp.Height; y++)
+                        {
+                            for (int x = 0; x < bmp.Width; x++)
+                            {
+                                Color px = bmp.GetPixel(x, y);
+
+                                if (px.A > 10)
+                                {
+                                    using (
+                                        var pen = new SolidBrush(Color.FromArgb(60, Color.White))
+                                    )
+                                    {
+                                        g.FillRectangle(pen, Bounds.X + x, Bounds.Y + y, 1, 1);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            public void UpdateHover(Point p)
+            {
+                Hover = Bounds.Contains(p);
+            }
+
+            public void CheckClick(Point p)
+            {
+                if (Bounds.Contains(p))
+                    OnClick?.Invoke();
+            }
+        }
+        private void CreateCanvas()
+        {
+            canvas = new ButtonCanvas();
+            canvas.Dock = DockStyle.Fill;
+            this.Controls.Add(canvas);
+        }
+
+        private void LoadButtons()
+        {
+            UnpackButtonImage(currentDirectory, "Launch.png", Properties.Resources.Launch);
+            UnpackButtonImage(currentDirectory, "Unpatch.png", Properties.Resources.Unpatch);
+            UnpackButtonImage(currentDirectory, "Patch.png", Properties.Resources.Patch);
+            UnpackButtonImage(currentDirectory, "ModPacks.png", Properties.Resources.ModPacks);
+            UnpackButtonImage(
+                currentDirectory,
+                "ManageInstalls.png",
+                Properties.Resources.ManageInstalls
+            );
+            UnpackButtonImage(
+                currentDirectory,
+                "CreateInstall.png",
+                Properties.Resources.CreateInstall
+            );
+            UnpackButtonImage(
+                currentDirectory,
+                "CommunityServer.png",
+                Properties.Resources.Discord
+            );
+            UnpackButtonImage(
+                currentDirectory,
+                "CreditPlant.png",
+                Properties.Resources.CreditPlant
+            );
+            UnpackButtonImage(
+                currentDirectory,
+                "OptionPlant.png",
+                Properties.Resources.OptionPlant
+            );
+            UnpackButtonImage(currentDirectory, "QuitPlant.png", Properties.Resources.QuitPlant);
+
+            canvas.AddButton(
+                new LauncherButton
+                {
+                    Id = "Launch",
+                    Image = LoadButtonFromFile("Launch.png"),
+                    Bounds = new Rectangle(450, 80, 176, 52),
+                    OnClick = () => btnLaunch_Click(null, null)
+                }
+            );
+
+            canvas.AddButton(
+                new LauncherButton
+                {
+                    Id = "Patch",
+                    Image = LoadButtonFromFile("Patch.png"),
+                    Bounds = new Rectangle(454, 135, 175, 49),
+                    OnClick = () => btnPatch_Click(null, null)
+                }
+            );
+
+            canvas.AddButton(
+                new LauncherButton
+                {
+                    Id = "Packs",
+                    Image = LoadButtonFromFile("ModPacks.png"),
+                    Bounds = new Rectangle(462, 181, 164, 45),
+                    OnClick = () => btnModPacks_Click(null, null)
+                }
+            );
+
+            canvas.AddButton(
+                new LauncherButton
+                {
+                    Id = "Browse",
+                    Image = LoadButtonFromFile("CreateInstall.png"),
+                    Bounds = new Rectangle(466, 223, 157, 51),
+                    OnClick = () => btnBrowse_Click(null, null)
+                }
+            );
+
+            canvas.AddButton(
+                new LauncherButton
+                {
+                    Id = "Community",
+                    Image = LoadButtonFromFile("CommunityServer.png"),
+                    Bounds = new Rectangle(0, 0, 222, 110),
+                    OnClick = () => btnCommunity_Click(null, null)
+                }
+            );
+
+            canvas.AddButton(
+                new LauncherButton
+                {
+                    Id = "Options",
+                    Image = LoadButtonFromFile("OptionPlant.png"),
+                    Bounds = new Rectangle(550, 269, 59, 59),
+                    OnClick = () => btnOption_Click(null, null)
+                }
+            );
+
+            canvas.AddButton(
+                new LauncherButton
+                {
+                    Id = "Credits",
+                    Image = LoadButtonFromFile("CreditPlant.png"),
+                    Bounds = new Rectangle(604, 271, 39, 66),
+                    OnClick = () => btnCredit_Click(null, null)
+                }
+            );
+
+            canvas.AddButton(
+                new LauncherButton
+                {
+                    Id = "Quit",
+                    Image = LoadButtonFromFile("QuitPlant.png"),
+                    Bounds = new Rectangle(638, 266, 44, 63),
+                    OnClick = () => btnQuit_Click(null, null)
+                }
+            );
+        }
+
         public Launcher()
         {
             InitializeComponent();
+            CreateCanvas();
+            LoadButtons();
             LoadBackgroundImage();
             LoadIcon();
 
@@ -156,19 +738,16 @@ namespace PVZF_Launcher
             LoadInstallPaths();
             AutoDetectAndRegisterInstallation();
             SelectDefaultInstallation();
-            UpdateBrowseButtonText();
-            UpdatePatchButtonState();
+            UpdateBrowseButtonImage();
+            UpdatePatchButtonImage();
         }
 
         private void InitializeComponent()
         {
             this.lblVersion = new Label();
             this.lblDirectory = new Label();
-            this.btnBrowse = new Button();
-            this.btnPatch = new Button();
-            this.btnLaunch = new Button();
-            this.btnQuit = new Button();
             this.DoubleBuffered = true;
+
             this.SetStyle(ControlStyles.OptimizedDoubleBuffer, true);
             this.SetStyle(ControlStyles.AllPaintingInWmPaint, true);
             this.SetStyle(ControlStyles.UserPaint, true);
@@ -176,75 +755,32 @@ namespace PVZF_Launcher
             this.SuspendLayout();
 
             this.lblVersion.AutoSize = true;
-            this.lblVersion.ForeColor = Color.Gray;
+            this.lblVersion.ForeColor = Color.White;
+            this.lblVersion.BackColor = Color.FromArgb(60, 60, 60);
             this.lblVersion.Font = new Font("Segoe UI", 8, FontStyle.Regular);
             this.lblVersion.Text = $"v{Application.ProductVersion}";
-            this.lblDirectory.Location = new Point(5, 90);
+            this.lblVersion.Location = new Point(5, 335);
             this.lblVersion.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
             this.Controls.Add(this.lblVersion);
 
             this.lblDirectory.AutoSize = true;
             this.lblDirectory.ForeColor = Color.White;
-            this.lblDirectory.Location = new Point(5, 30);
+            this.lblDirectory.BackColor = Color.FromArgb(60, 60, 60);
+            this.lblDirectory.Location = new Point(0, 0);
             this.lblDirectory.Name = "lblDirectory";
             this.lblDirectory.Size = new Size(107, 13);
             this.lblDirectory.TabIndex = 0;
             this.lblDirectory.Text = "No directory selected";
-
-            this.btnBrowse.Location = new Point(475, 75);
-            this.btnBrowse.Name = "btnBrowse";
-            this.btnBrowse.TabIndex = 1;
-            this.btnBrowse.Text = "Change Directory";
-            this.btnBrowse.Click += new EventHandler(this.btnBrowse_Click);
-            this.btnBrowse.Height = 35;
-            this.btnBrowse.Width = 150;
-
-            this.btnPatch.Location = new Point(475, 125);
-            this.btnPatch.Name = "btnPatch";
-            this.btnPatch.TabIndex = 2;
-            this.btnPatch.Text = "Patch Game";
-            this.btnPatch.Click += new EventHandler(this.btnPatch_Click);
-            this.btnPatch.Height = 35;
-            this.btnPatch.Width = 150;
-
-            this.btnLaunch.Location = new Point(475, 175);
-            this.btnLaunch.Name = "btnLaunch";
-            this.btnLaunch.TabIndex = 3;
-            this.btnLaunch.Text = "Launch Game";
-            this.btnLaunch.Click += new EventHandler(this.btnLaunch_Click);
-            this.btnLaunch.Height = 35;
-            this.btnLaunch.Width = 150;
-
-            this.btnQuit.Location = new Point(475, 225);
-            this.btnQuit.Name = "btnQuit";
-            this.btnQuit.TabIndex = 4;
-            this.btnQuit.Text = "Quit Launcher";
-            this.btnQuit.Click += new EventHandler(this.btnQuit_Click);
-            this.btnQuit.Height = 35;
-            this.btnQuit.Width = 150;
-
-            StyleButton(btnBrowse);
-            StyleButton(btnPatch);
-            StyleButton(btnLaunch);
-            StyleButton(btnQuit);
-
-            this.BackColor = Color.FromArgb(40, 40, 40);
-            this.ClientSize = new Size(750, 350);
             this.Controls.Add(this.lblDirectory);
-            this.Controls.Add(this.btnBrowse);
-            this.Controls.Add(this.btnPatch);
-            this.Controls.Add(this.btnLaunch);
-            this.Controls.Add(this.btnQuit);
+
+            this.ClientSize = new Size(750, 350);
             this.FormBorderStyle = FormBorderStyle.None;
-            this.Name = "PVZFLAUNCHER";
             this.StartPosition = FormStartPosition.CenterScreen;
             this.Text = "PvZ RH Mod Installer";
-            this.Load += new EventHandler(this.Form1_Load);
+            this.DoubleBuffered = true;
 
             this.ResumeLayout(false);
-            this.PerformLayout();
         }
-
         protected override void WndProc(ref Message m)
         {
             const int WM_NCHITTEST = 0x84;
@@ -664,7 +1200,23 @@ namespace PVZF_Launcher
 
                 if (!string.IsNullOrEmpty(modpackZipPath))
                 {
-                    ExtractZipOverwrite(modpackZipPath, installPath);
+                    ModPackInfo pack = ValidateModpack(modpackZipPath, loader);
+                    pack.InstalledFiles = GetModpackFileList(modpackZipPath);
+                    InstallationInfo inst =
+                        LoadInstallationInfo(installPath) ?? CreateInstallationInfo(installPath);
+                    var conflicts = GetConflicts(inst, pack);
+                    if (conflicts.Count > 0)
+                    {
+                        string preview = string.Join("\n", conflicts.Take(20));
+                        MessageBox.Show(
+                            $"Warning: This modpack overwrites {conflicts.Count} files:\n\n{preview}",
+                            "Modpack Conflict",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning
+                        );
+                    }
+                    InstallModpack(inst, pack);
+                    SaveInstallationInfo(inst);
                 }
 
                 bool languageChanged = false;
@@ -849,8 +1401,17 @@ namespace PVZF_Launcher
                 }
 
                 foreach (var inst in installPaths)
+                {
                     RefreshInstallationMetadata(inst);
-
+                    var info = LoadInstallationInfo(inst.Path);
+                    if (info != null)
+                    {
+                        inst.InstalledModpacks = info.InstalledModpacks ?? new List<ModPackInfo>();
+                        inst.ModCount = info.ModCount;
+                        inst.LoaderType = info.LoaderType;
+                        inst.LastPlayed = info.LastPlayed;
+                    }
+                }
                 SaveInstallPaths();
             }
             catch
@@ -950,8 +1511,19 @@ namespace PVZF_Launcher
         {
             try
             {
-                return Directory.Exists(Path.Combine(installPath, "MelonLoader"))
-                    || Directory.Exists(Path.Combine(installPath, "BepInEx"));
+                if (Directory.Exists(Path.Combine(installPath, "MelonLoader")))
+                    return true;
+                if (File.Exists(Path.Combine(installPath, "version.dll")))
+                    return true;
+
+                if (Directory.Exists(Path.Combine(installPath, "BepInEx")))
+                    return true;
+                if (File.Exists(Path.Combine(installPath, "winhttp.dll")))
+                    return true;
+                if (File.Exists(Path.Combine(installPath, "doorstop_config.ini")))
+                    return true;
+
+                return false;
             }
             catch
             {
@@ -963,10 +1535,13 @@ namespace PVZF_Launcher
         {
             try
             {
-                if (Directory.Exists(Path.Combine(installPath, "MelonLoader")))
+                string melon = Path.Combine(installPath, "MelonLoader");
+                string bepin = Path.Combine(installPath, "BepInEx");
+
+                if (Directory.Exists(melon))
                     return "Melon";
 
-                if (Directory.Exists(Path.Combine(installPath, "BepInEx")))
+                if (Directory.Exists(bepin))
                     return "Bep";
 
                 return "false";
@@ -1006,6 +1581,8 @@ namespace PVZF_Launcher
         {
             public string Version { get; set; }
             public string DownloadUrl { get; set; }
+            public string Net6DownloadUrl { get; set; }
+            public string TranslationModDownloadUrl { get; set; }
         }
 
         private string ResolveRootPath(string rawPath)
@@ -1048,48 +1625,58 @@ namespace PVZF_Launcher
             }
         }
 
-        private void UpdateBrowseButtonText()
+        private void UpdatePatchButtonImage()
         {
-            bool storeExists = InstallationStoreExists();
-
-            if (!storeExists)
+            if (InvokeRequired)
             {
-                if (installPaths.Count == 1)
-                {
-                    btnBrowse.Text = "Change Installation";
-                    return;
-                }
-                else
-                {
-                    btnBrowse.Text = "Manage Installs";
-                    return;
-                }
+                Invoke(new Action(UpdatePatchButtonImage));
+                return;
             }
 
-            if (installPaths.Count == 0)
-            {
-                btnBrowse.Text = "Create Installation";
-            }
-            else if (installPaths.Count == 1)
-            {
-                btnBrowse.Text = "Change Installation";
-            }
-            else
-            {
-                btnBrowse.Text = "Manage Installs";
-            }
-        }
+            var btn = canvas.GetButton("Patch");
+            if (btn == null)
+                return;
 
-        private void UpdatePatchButtonState()
-        {
+            Image old = btn.Image;
+
             if (string.IsNullOrEmpty(currentDirectory))
             {
-                btnPatch.Text = "Patch Game";
+                btn.Image = LoadButtonFromFile("Patch.png");
+                old?.Dispose();
+                canvas.Invalidate();
                 return;
             }
 
             bool patched = IsPatched(currentDirectory);
-            btnPatch.Text = patched ? "Unpatch" : "Patch";
+            btn.Image = patched
+                ? LoadButtonFromFile("Unpatch.png")
+                : LoadButtonFromFile("Patch.png");
+
+            old?.Dispose();
+            canvas.Invalidate();
+        }
+
+        private void UpdateBrowseButtonImage()
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new Action(UpdateBrowseButtonImage));
+                return;
+            }
+
+            var btn = canvas.GetButton("Browse");
+            if (btn == null)
+                return;
+
+            Image old = btn.Image;
+
+            btn.Image =
+                installPaths.Count == 0
+                    ? LoadButtonFromFile("CreateInstall.png")
+                    : LoadButtonFromFile("ManageInstalls.png");
+
+            old?.Dispose();
+            canvas.Invalidate();
         }
 
         private void btnBrowse_Click(object sender, EventArgs e)
@@ -1115,10 +1702,14 @@ namespace PVZF_Launcher
             this.SuspendLayout();
             this.Controls.Clear();
 
+            this.BackgroundImage = BytesToImage(Properties.Resources.Menu);
+            this.BackgroundImageLayout = ImageLayout.Stretch;
+
             var title = new Label
             {
                 Text = "Edit Installation",
                 ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
                 Font = new Font("Segoe UI", 14, FontStyle.Bold),
                 Location = new Point(20, 15),
                 AutoSize = true
@@ -1129,6 +1720,7 @@ namespace PVZF_Launcher
             {
                 Text = "Display Name:",
                 ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
                 Location = new Point(20, 70),
                 AutoSize = true
             };
@@ -1146,6 +1738,7 @@ namespace PVZF_Launcher
             {
                 Text = "Loader Type:",
                 ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
                 Location = new Point(20, 150),
                 AutoSize = true
             };
@@ -1171,6 +1764,7 @@ namespace PVZF_Launcher
             {
                 Text = "Directory:",
                 ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
                 Location = new Point(20, 110),
                 AutoSize = true
             };
@@ -1259,7 +1853,7 @@ namespace PVZF_Launcher
                 }
 
                 RefreshInstallationMetadata(inst);
-
+                SaveInstallationInfo(inst);
                 SaveInstallPaths();
                 LoadInstallPaths();
                 ShowInstallationManager();
@@ -1287,10 +1881,14 @@ namespace PVZF_Launcher
             this.SuspendLayout();
             this.Controls.Clear();
 
+            this.BackgroundImage = BytesToImage(Properties.Resources.Menu);
+            this.BackgroundImageLayout = ImageLayout.Stretch;
+
             var title = new Label
             {
                 Text = "Installations",
                 ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
                 Font = new Font("Segoe UI", 14, FontStyle.Bold),
                 Location = new Point(20, 15),
                 AutoSize = true
@@ -1510,10 +2108,107 @@ namespace PVZF_Launcher
             };
             this.Controls.Add(back);
         }
-        private void ShowCreateInstallationMenu(bool openedFromMainMenu)
+
+        private async Task<string> DownloadWithSplashAsync(string url, string fileName)
+        {
+            string output = Path.Combine(Path.GetTempPath(), fileName);
+
+            using (var client = new WebClient())
+            {
+                Splash splash = new Splash("Starting download...");
+                splash.Show();
+
+                client.DownloadProgressChanged += (s, e) =>
+                {
+                    splash.UpdateMessage(
+                        $"Do not close\n May still be downloading at 0% \n Downloading {fileName}\n{e.ProgressPercentage}%"
+                    );
+                };
+
+                client.DownloadFileCompleted += (s, e) =>
+                {
+                    splash.UpdateMessage("Download complete!");
+                    Task.Delay(500).Wait();
+                    splash.Close();
+                };
+
+                await client.DownloadFileTaskAsync(new Uri(url), output);
+            }
+
+            return output;
+        }
+
+        private string SelectValidVersionZip()
+        {
+            while (true)
+            {
+                using (OpenFileDialog dialog = new OpenFileDialog())
+                {
+                    dialog.Filter = "ZIP Files (*.zip)|*.zip";
+                    dialog.Title = "Select Version ZIP";
+
+                    if (dialog.ShowDialog() != DialogResult.OK)
+                        return null;
+
+                    if (IsValidVersionZip(dialog.FileName))
+                        return dialog.FileName;
+
+                    MessageBox.Show("Invalid version ZIP.\nCould not find PlantsVsZombiesRH.exe.");
+                }
+            }
+        }
+
+        private string SelectValidNet6Zip()
+        {
+            while (true)
+            {
+                using (OpenFileDialog dialog = new OpenFileDialog())
+                {
+                    dialog.Filter = "ZIP Files (*.zip)|*.zip";
+                    dialog.Title = "Select net6.zip";
+
+                    if (dialog.ShowDialog() != DialogResult.OK)
+                        return null;
+
+                    if (IsValidNet6Zip(dialog.FileName))
+                        return dialog.FileName;
+
+                    MessageBox.Show(
+                        "Invalid net6.zip.\nCould not find Il2CppInterop.Common.dll inside a folder named 'net6'."
+                    );
+                }
+            }
+        }
+        private string SelectValidTranslationZip()
+        {
+            while (true)
+            {
+                using (OpenFileDialog dialog = new OpenFileDialog())
+                {
+                    dialog.Filter = "ZIP Files (*.zip)|*.zip";
+                    dialog.Title = "Select TranslationMod.zip";
+
+                    if (dialog.ShowDialog() != DialogResult.OK)
+                        return null;
+
+                    if (IsValidTranslationModZip(dialog.FileName))
+                        return dialog.FileName;
+
+                    MessageBox.Show(
+                        "Invalid TranslationMod.zip.\nCould not find PvZ_Fusion_Translator.dll."
+                    );
+                }
+            }
+        }
+
+        private async void ShowCreateInstallationMenu(bool openedFromMainMenu)
         {
             this.SuspendLayout();
             this.Controls.Clear();
+
+            this.BackgroundImage = BytesToImage(Properties.Resources.Menu);
+            this.BackgroundImageLayout = ImageLayout.Stretch;
+
             var store = LoadInstallationStore();
 
             string selectedVersionZip = null;
@@ -1524,6 +2219,7 @@ namespace PVZF_Launcher
             Label title = new Label();
             title.Text = "Create New Installation";
             title.ForeColor = Color.White;
+            title.BackColor = Color.FromArgb(60, 60, 60);
             title.Font = new Font("Segoe UI", 14, FontStyle.Bold);
             title.Location = new Point(20, 15);
             title.AutoSize = true;
@@ -1537,6 +2233,9 @@ namespace PVZF_Launcher
             versionBox.SelectedIndex = 0;
             this.Controls.Add(versionBox);
 
+            foreach (var entry in store.Versions)
+                versionBox.Items.Add(entry.Version);
+
             ComboBox loaderBox = new ComboBox();
             loaderBox.Location = new Point(20, 120);
             loaderBox.Width = 300;
@@ -1546,6 +2245,7 @@ namespace PVZF_Launcher
             loaderBox.Items.Add("BepInEx");
             loaderBox.Items.Add("None");
             loaderBox.SelectedIndex = 0;
+            loaderBox.Visible = false;
             this.Controls.Add(loaderBox);
 
             ComboBox languageBox = new ComboBox();
@@ -1573,28 +2273,31 @@ namespace PVZF_Launcher
             languageBox.Items.Add("Українська");
             languageBox.Items.Add("Tiếng Việt");
 
-            Dictionary<string, string> languageMap = new Dictionary<string, string>();
-            languageMap.Add("中文 (Chinese)", "Chinese");
-            languageMap.Add("العربية", "Arabic");
-            languageMap.Add("English", "English");
-            languageMap.Add("Filipino", "Filipino");
-            languageMap.Add("Français", "French");
-            languageMap.Add("Deutsch", "German");
-            languageMap.Add("Bahasa Indonesia", "Indonesian");
-            languageMap.Add("Italiano", "Italian");
-            languageMap.Add("日本語", "Japanese");
-            languageMap.Add("Basa Jawa", "Javanese");
-            languageMap.Add("한국어", "Korean");
-            languageMap.Add("Polski", "Polish");
-            languageMap.Add("Português", "Portuguese");
-            languageMap.Add("Română", "Romanian");
-            languageMap.Add("Русский", "Russian");
-            languageMap.Add("Español", "Spanish");
-            languageMap.Add("Türkçe", "Turkish");
-            languageMap.Add("Українська", "Ukrainian");
-            languageMap.Add("Tiếng Việt", "Vietnamese");
+            Dictionary<string, string> languageMap = new Dictionary<string, string>()
+            {
+                { "中文 (Chinese)", "Chinese" },
+                { "العربية", "Arabic" },
+                { "English", "English" },
+                { "Filipino", "Filipino" },
+                { "Français", "French" },
+                { "Deutsch", "German" },
+                { "Bahasa Indonesia", "Indonesian" },
+                { "Italiano", "Italian" },
+                { "日本語", "Japanese" },
+                { "Basa Jawa", "Javanese" },
+                { "한국어", "Korean" },
+                { "Polski", "Polish" },
+                { "Português", "Portuguese" },
+                { "Română", "Romanian" },
+                { "Русский", "Russian" },
+                { "Español", "Spanish" },
+                { "Türkçe", "Turkish" },
+                { "Українська", "Ukrainian" },
+                { "Tiếng Việt", "Vietnamese" }
+            };
 
             languageBox.SelectedIndex = 0;
+            languageBox.Visible = false;
             this.Controls.Add(languageBox);
 
             Button modpackBtn = new Button();
@@ -1603,6 +2306,7 @@ namespace PVZF_Launcher
             modpackBtn.Height = 40;
             modpackBtn.Location = new Point(20, 220);
             StyleButton(modpackBtn);
+            modpackBtn.Visible = false;
 
             modpackBtn.Click += delegate
             {
@@ -1614,175 +2318,159 @@ namespace PVZF_Launcher
                     if (dialog.ShowDialog() == DialogResult.OK)
                     {
                         selectedModpackZip = dialog.FileName;
-                        MessageBox.Show("Modpack selected:\n" + selectedModpackZip);
-                    }
-                }
-            };
-            this.Controls.Add(modpackBtn);
 
-            languageBox.Visible = false;
-            modpackBtn.Visible = false;
-            loaderBox.Visible = false;
-
-            languageBox.SelectedIndexChanged += delegate
-            {
-                string lang = languageMap[languageBox.SelectedItem.ToString()];
-
-                if (lang == "Chinese")
-                    return;
-
-                if (versionBox.SelectedItem == null || versionBox.SelectedIndex == 0)
-                    return;
-
-                bool needsNet6 = RequiresNet6(versionBox.SelectedItem.ToString());
-
-                if (selectedTranslationZip == null)
-                {
-                    DialogResult confirm = MessageBox.Show(
-                        "To use this language, you must download and install the Translation Mod.\n\n"
-                            + "IMPORTANT!! FIND YOUR VERSION IN RELEASES\n"
-                            + "LOOK FOR THE FOLLOWING:\n"
-                            + "'Manual MelonLoader Installation Walkthrough'\n"
-                            + "SKIP STEP 1 AND STEP 2\n"
-                            + "SKIP STEPS WITH 'Extract' \n\n"
-                            + "Would you like to continue?",
-                        "Translation Mod Required",
-                        MessageBoxButtons.OKCancel,
-                        MessageBoxIcon.Information
-                    );
-
-                    if (confirm == DialogResult.Cancel)
-                    {
-                        languageBox.SelectedIndex = 0;
-                        MessageBox.Show("Defaulting language.");
-                        return;
-                    }
-
-                    DialogResult downloaded = MessageBox.Show(
-                        needsNet6
-                          ? "Have you already downloaded the Translation Mod files?\n\nYou need BOTH:\n • net6.zip\n • PVZF-Translation.zip"
-                          : "Have you already downloaded the Translation Mod files?\n\nYou need:\n • PVZF-Translation.zip",
-                        "Translation Mod Download",
-                        MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Question
-                    );
-
-                    if (downloaded == DialogResult.No)
-                    {
                         try
                         {
-                            Process.Start(
-                                new ProcessStartInfo
-                                {
-                                    FileName =
-                                        "https://github.com/Teyliu/PVZF-Translation/releases",
-                                    UseShellExecute = true
-                                }
-                            );
-                        }
-                        catch
-                        {
-                            MessageBox.Show("Unable to open the Translation Mod release page.");
-                        }
-                    }
-
-                    DialogResult selectFiles = MessageBox.Show(
-                        needsNet6
-                          ? "You will now be asked to select the required files\n\nFirst: net6.zip\nThen: PVZF-Translation.zip"
-                          : "You will now be asked to select the required file\n\nPVZF-Translation.zip",
-                        "File Selection",
-                        MessageBoxButtons.OKCancel,
-                        MessageBoxIcon.Information
-                    );
-
-                    if (selectFiles == DialogResult.Cancel)
-                    {
-                        languageBox.SelectedIndex = 0;
-                        MessageBox.Show("Defaulting language.");
-                        return;
-                    }
-
-                    if (needsNet6)
-                    {
-                        while (true)
-                        {
-                            using (OpenFileDialog dialog = new OpenFileDialog())
+                            string loaderType = loaderBox.SelectedItem?.ToString();
+                            if (loaderType == null || loaderType == "None")
                             {
-                                dialog.Title = "Select net6.zip";
-                                dialog.Filter = "ZIP Files (*.zip)|*.zip";
-
-                                if (dialog.ShowDialog() != DialogResult.OK)
-                                {
-                                    languageBox.SelectedIndex = 0;
-                                    MessageBox.Show("Defaulting language.");
-                                    return;
-                                }
-
-                                string net6Zip = dialog.FileName;
-
-                                if (IsValidNet6Zip(net6Zip))
-                                {
-                                    selectedNet6Zip = net6Zip;
-                                    break;
-                                }
-
-                                MessageBox.Show(
-                                    "Invalid net6.zip.\nCould not find Il2CppInterop.Common.dll inside a folder named 'net6'.",
-                                    "Invalid net6.zip",
-                                    MessageBoxButtons.OK,
-                                    MessageBoxIcon.Warning
-                                );
-                            }
-                        }
-                    }
-                    else
-                    {
-                        selectedNet6Zip = null;
-                    }
-
-                    while (true)
-                    {
-                        using (OpenFileDialog dialog = new OpenFileDialog())
-                        {
-                            dialog.Title = "Select TranslationMod.zip";
-                            dialog.Filter = "ZIP Files (*.zip)|*.zip";
-
-                            if (dialog.ShowDialog() != DialogResult.OK)
-                            {
-                                languageBox.SelectedIndex = 0;
-                                MessageBox.Show("Defaulting language.");
+                                MessageBox.Show("Please select a loader first.");
                                 return;
                             }
 
-                            string translationZip = dialog.FileName;
-
-                            if (IsValidTranslationModZip(translationZip))
-                            {
-                                selectedTranslationZip = translationZip;
-                                break;
-                            }
+                            ModPackInfo info = ValidateModpack(selectedModpackZip, loaderType);
 
                             MessageBox.Show(
-                                "Invalid TranslationMod.zip.\nCould not find PvZ_Fusion_Translator.dll.",
-                                "Invalid TranslationMod.zip",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Warning
+                                $"Modpack Valid!\n\n"
+                                    + $"Name: {info.Name}\n"
+                                    + $"Creator: {info.Creator}\n"
+                                    + $"Loader: {info.LoaderType}\n"
+                                    + $"File: {info.SourceFile}"
                             );
                         }
+                        catch (Exception ex)
+                        {
+                            selectedModpackZip = null;
+                            MessageBox.Show("Invalid Modpack:\n" + ex.Message);
+                        }
                     }
-
-                    MessageBox.Show("Translation Mod files selected successfully.");
                 }
+            };
+
+            this.Controls.Add(modpackBtn);
+
+            Button installBtn = new Button();
+            installBtn.Text = "Install";
+            installBtn.Width = 200;
+            installBtn.Height = 40;
+            installBtn.Location = new Point(20, 280);
+            StyleButton(installBtn);
+            installBtn.BackColor = Color.Green;
+            this.Controls.Add(installBtn);
+
+            Button backBtn = new Button();
+            backBtn.Text = "Go Back";
+            backBtn.Width = 200;
+            backBtn.Height = 40;
+            backBtn.Location = new Point(310, 280);
+            StyleButton(backBtn);
+
+            backBtn.Click += delegate
+            {
+                if (openedFromMainMenu)
+                    RebuildMainUI();
+                else
+                    ShowInstallationManager();
+            };
+
+            this.Controls.Add(backBtn);
+
+            if (openedFromMainMenu)
+            {
+                Button addExistingBtn = new Button();
+                addExistingBtn.Text = "Add Existing";
+                addExistingBtn.Width = 200;
+                addExistingBtn.Height = 40;
+                addExistingBtn.Location = new Point(530, 280);
+                StyleButton(addExistingBtn);
+
+                addExistingBtn.Click += delegate
+                {
+                    using (FolderBrowserDialog dialog = new FolderBrowserDialog())
+                    {
+                        if (dialog.ShowDialog() == DialogResult.OK)
+                        {
+                            string path = dialog.SelectedPath;
+
+                            bool exists = installPaths.Any(
+                                i => string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase)
+                            );
+
+                            if (!exists)
+                            {
+                                var info = CreateInstallationInfo(path);
+                                installPaths.Add(info);
+                                SaveInstallPaths();
+                            }
+
+                            RebuildMainUI();
+                        }
+                    }
+                };
+
+                this.Controls.Add(addExistingBtn);
+            }
+
+            versionBox.SelectedIndexChanged += async delegate
+            {
+                selectedTranslationZip = null;
+                selectedNet6Zip = null;
+
+                if (versionBox.SelectedIndex == 0)
+                {
+                    loaderBox.Visible = false;
+                    languageBox.Visible = false;
+                    modpackBtn.Visible = false;
+                    return;
+                }
+
+                loaderBox.Visible = true;
+
+                string selectedVersion = versionBox.SelectedItem.ToString();
+                var entry = store.Versions.FirstOrDefault(v => v.Version == selectedVersion);
+
+                if (entry == null)
+                    return;
+
+                DialogResult haveZip = MessageBox.Show(
+                    "Do you already have version" + selectedVersion + ".zip Downloaded?",
+                    selectedVersion + ".ZIP",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question
+                );
+
+                if (haveZip == DialogResult.Yes)
+                {
+                    selectedVersionZip = SelectValidVersionZip();
+                    return;
+                }
+
+                selectedVersionZip = await DownloadWithSplashAsync(
+                    entry.DownloadUrl,
+                    selectedVersion + ".zip"
+                );
+
+                if (!IsValidVersionZip(selectedVersionZip))
+                {
+                    MessageBox.Show("Downloaded version is invalid.");
+                    selectedVersionZip = null;
+                    return;
+                }
+
+                MessageBox.Show("Version downloaded successfully.");
             };
 
             loaderBox.SelectedIndexChanged += delegate
             {
                 string loader = loaderBox.SelectedItem.ToString();
+
                 if (loader == "<Select Loader>")
                 {
                     languageBox.Visible = false;
                     modpackBtn.Visible = false;
+                    return;
                 }
+
                 if (loader == "MelonLoader")
                 {
                     languageBox.Enabled = true;
@@ -1803,112 +2491,98 @@ namespace PVZF_Launcher
                 }
             };
 
-            foreach (var entry in store.Versions)
-                versionBox.Items.Add(entry.Version);
-
-            Button installBtn = new Button();
-            installBtn.Text = "Install";
-            installBtn.Width = 200;
-            installBtn.Height = 40;
-            installBtn.Location = new Point(20, 280);
-            StyleButton(installBtn);
-            installBtn.BackColor = Color.Green;
-            this.Controls.Add(installBtn);
-
-            versionBox.SelectedIndexChanged += delegate
+            languageBox.SelectedIndexChanged += async delegate
             {
-                selectedTranslationZip = null;
-                selectedNet6Zip = null;
-
-                if (versionBox.SelectedItem == null || versionBox.SelectedIndex == 0)
-                {
-                    loaderBox.Visible = false;
-                    languageBox.Visible = false;
-                    modpackBtn.Visible = false;
+                string lang = languageMap[languageBox.SelectedItem.ToString()];
+                if (lang == "Chinese")
                     return;
-                }
-                loaderBox.Visible = true;
+                if (versionBox.SelectedIndex == 0)
+                    return;
+
                 string selectedVersion = versionBox.SelectedItem.ToString();
-                var entry = store.Versions.FirstOrDefault(v => v.Version == selectedVersion);
+                var entry = store.Versions.First(v => v.Version == selectedVersion);
 
-                if (entry == null)
-                    return;
+                bool needsNet6 = RequiresNet6(selectedVersion);
 
                 DialogResult confirm = MessageBox.Show(
-                    "Download version " + selectedVersion + " now?",
-                    "Download Version",
+                    "To use this language, you must have Translation Mod.\n\n"
+                        + "Would you like to install the Translation Mod",
+                    "Translation Mod Required",
                     MessageBoxButtons.OKCancel,
-                    MessageBoxIcon.Question
+                    MessageBoxIcon.Information
                 );
 
                 if (confirm == DialogResult.Cancel)
                 {
-                    DialogResult local = MessageBox.Show(
-                        "Would you like to select an already downloaded "
-                            + selectedVersion
-                            + ".ZIP instead?",
-                        "Select Local ZIP",
-                        MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Question
-                    );
+                    languageBox.SelectedIndex = 0;
+                    MessageBox.Show("Defaulting language.");
+                    return;
+                }
 
-                    if (local == DialogResult.No)
+                DialogResult haveFiles = MessageBox.Show(
+                    needsNet6
+                      ? "Do you already have BOTH net6.zip and TranslationMod.zip?"
+                      : "Do you already have TranslationMod.zip?",
+                    "Translation Mod Files",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question
+                );
+
+                if (haveFiles == DialogResult.Yes)
+                {
+                    if (needsNet6)
                     {
+                        selectedNet6Zip = SelectValidNet6Zip();
+                        if (selectedNet6Zip == null)
+                        {
+                            languageBox.SelectedIndex = 0;
+                            return;
+                        }
+                    }
+
+                    selectedTranslationZip = SelectValidTranslationZip();
+                    if (selectedTranslationZip == null)
+                    {
+                        languageBox.SelectedIndex = 0;
                         return;
                     }
+
+                    MessageBox.Show("Translation Mod files selected successfully.");
                 }
                 else
                 {
-                    try
+                    if (needsNet6)
                     {
-                        Process.Start(
-                            new ProcessStartInfo
-                            {
-                                FileName = entry.DownloadUrl,
-                                UseShellExecute = true
-                            }
+                        selectedNet6Zip = await DownloadWithSplashAsync(
+                            entry.Net6DownloadUrl,
+                            "net6.zip"
                         );
+
+                        if (!IsValidNet6Zip(selectedNet6Zip))
+                        {
+                            MessageBox.Show("Downloaded net6.zip is invalid.");
+                            languageBox.SelectedIndex = 0;
+                            return;
+                        }
                     }
-                    catch
+
+                    selectedTranslationZip = await DownloadWithSplashAsync(
+                        entry.TranslationModDownloadUrl,
+                        "TranslationMod.zip"
+                    );
+
+                    if (!IsValidTranslationModZip(selectedTranslationZip))
                     {
-                        MessageBox.Show("Unable to open the download link.");
+                        MessageBox.Show("Downloaded TranslationMod.zip is invalid.");
+                        languageBox.SelectedIndex = 0;
                         return;
                     }
-                }
 
-                while (true)
-                {
-                    using (OpenFileDialog dialog = new OpenFileDialog())
-                    {
-                        dialog.Title = "Select the downloaded version ZIP file";
-                        dialog.Filter = "ZIP Files (*.zip)|*.zip";
-
-                        if (dialog.ShowDialog() != DialogResult.OK)
-                        {
-                            selectedVersionZip = null;
-                            return;
-                        }
-
-                        string versionZip = dialog.FileName;
-
-                        if (IsValidVersionZip(versionZip))
-                        {
-                            selectedVersionZip = versionZip;
-                            MessageBox.Show("Version ZIP selected:\n" + selectedVersionZip);
-                            return;
-                        }
-
-                        MessageBox.Show(
-                            "Invalid version ZIP.\nCould not find PlantsVsZombiesRH.exe.",
-                            "Invalid Version ZIP",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Warning
-                        );
-                    }
+                    MessageBox.Show("Translation Mod files downloaded successfully.");
                 }
             };
 
-            installBtn.Click += delegate
+            installBtn.Click += async delegate
             {
                 string version = versionBox.SelectedItem.ToString();
                 string loader = loaderBox.SelectedItem.ToString();
@@ -1928,7 +2602,9 @@ namespace PVZF_Launcher
 
                 if (string.IsNullOrEmpty(selectedVersionZip))
                 {
-                    MessageBox.Show("Please select a valid version ZIP before installing.");
+                    MessageBox.Show(
+                        "Please select or download a valid version ZIP before installing."
+                    );
                     return;
                 }
 
@@ -1943,67 +2619,7 @@ namespace PVZF_Launcher
                 );
             };
 
-            Button backBtn = new Button();
-            backBtn.Text = "Go Back";
-            backBtn.Width = 200;
-            backBtn.Height = 40;
-            backBtn.Location = new Point(this.ClientSize.Width - 220, this.ClientSize.Height - 80);
-            StyleButton(backBtn);
-
-            backBtn.Click += delegate
-            {
-                if (openedFromMainMenu)
-                    RebuildMainUI();
-                else
-                    ShowInstallationManager();
-            };
-            this.Controls.Add(backBtn);
-
-            if (openedFromMainMenu)
-            {
-                Button addExistingBtn = new Button();
-                addExistingBtn.Text = "Add Existing";
-                addExistingBtn.Width = 200;
-                addExistingBtn.Height = 40;
-                addExistingBtn.Location = new Point(
-                    this.ClientSize.Width - 440,
-                    this.ClientSize.Height - 80
-                );
-                StyleButton(addExistingBtn);
-                this.ResumeLayout(false);
-
-                addExistingBtn.Click += delegate
-                {
-                    using (FolderBrowserDialog dialog = new FolderBrowserDialog())
-                    {
-                        if (dialog.ShowDialog() == DialogResult.OK)
-                        {
-                            string path = dialog.SelectedPath;
-
-                            bool exists = false;
-                            foreach (var i in installPaths)
-                            {
-                                if (string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase))
-                                {
-                                    exists = true;
-                                    break;
-                                }
-                            }
-
-                            if (!exists)
-                            {
-                                var info = CreateInstallationInfo(path);
-                                installPaths.Add(info);
-                                SaveInstallPaths();
-                            }
-
-                            RebuildMainUI();
-                        }
-                    }
-                };
-
-                this.Controls.Add(addExistingBtn);
-            }
+            this.ResumeLayout(false);
         }
 
         private void RebuildMainUI()
@@ -2012,7 +2628,12 @@ namespace PVZF_Launcher
 
             this.SuspendLayout();
             this.Controls.Clear();
+
             InitializeComponent();
+            LoadBackgroundImage();
+            CreateCanvas();
+            LoadButtons();
+
             LoadInstallPaths();
 
             if (
@@ -2030,11 +2651,309 @@ namespace PVZF_Launcher
                 SelectDefaultInstallation();
             }
 
-            UpdateBrowseButtonText();
-            UpdatePatchButtonState();
+            UpdateBrowseButtonImage();
+            UpdatePatchButtonImage();
             this.ResumeLayout(false);
+            this.PerformLayout();
         }
 
+        private void ShowModpackManager(InstallationInfo inst)
+        {
+            this.Controls.Clear();
+            this.BackgroundImage = BytesToImage(Properties.Resources.Menu);
+            this.BackgroundImageLayout = ImageLayout.Stretch;
+
+            Label title = new Label
+            {
+                Text = $"Modpacks — {inst.DisplayName}",
+                ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
+                Font = new Font("Segoe UI", 14, FontStyle.Bold),
+                Location = new Point(20, 20),
+                AutoSize = true
+            };
+            this.Controls.Add(title);
+
+            packPanel = new Panel
+            {
+                Location = new Point(20, 50),
+                Size = new Size(this.ClientSize.Width - 40, this.ClientSize.Height - 140),
+                AutoScroll = true,
+                BackColor = Color.FromArgb(30, 30, 30),
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            this.Controls.Add(packPanel);
+
+            string disabledMelon = Path.Combine(inst.Path, "_DISABLED_MELONLOADER");
+            string disabledBep = Path.Combine(inst.Path, "_DISABLED_BEPINEX");
+
+            foreach (var pack in inst.InstalledModpacks.ToList())
+            {
+                bool isDisabled =
+                    (pack.LoaderType == "MelonLoader" && Directory.Exists(disabledMelon))
+                    || (pack.LoaderType == "BepInEx" && Directory.Exists(disabledBep));
+
+                Panel row = new Panel
+                {
+                    Height = 60,
+                    Dock = DockStyle.Top,
+                    BackColor = Color.FromArgb(50, 50, 50)
+                };
+
+                string statusText = isDisabled ? " (DISABLED)" : "";
+                string loaderText = pack.LoaderType;
+
+                Label lbl = new Label
+                {
+                    Text =
+                        $"[{loaderText}] {pack.Name} by {pack.Creator} — {pack.InstalledFiles.Count} files{statusText}",
+                    ForeColor = isDisabled ? Color.Gray : Color.White,
+                    Location = new Point(10, 10),
+                    AutoSize = true
+                };
+
+                Button uninstall = new Button { Text = "Uninstall", Width = 120, Height = 35 };
+                StyleButton(uninstall);
+
+                if (isDisabled)
+                {
+                    uninstall.Enabled = false;
+                    uninstall.BackColor = Color.FromArgb(80, 80, 80);
+                }
+
+                uninstall.Click += (s, e) =>
+                {
+                    UninstallModpack(inst, pack);
+                    SaveInstallationInfo(inst);
+                    ShowModpackManager(inst);
+                };
+
+                row.Controls.Add(lbl);
+                row.Controls.Add(uninstall);
+
+                uninstall.Location = new Point(row.Width - uninstall.Width - 10, 12);
+                row.Resize += (s, e) =>
+                {
+                    uninstall.Left = row.Width - uninstall.Width - 10;
+                };
+
+                packPanel.Controls.Add(row);
+                packPanel.Controls.SetChildIndex(row, 0);
+            }
+
+            Button add = new Button
+            {
+                Text = "+ Add ModPack",
+                Width = 200,
+                Height = 40,
+                Location = new Point(20, this.ClientSize.Height - 80)
+            };
+            StyleButton(add);
+            add.BackColor = Color.Green;
+
+            add.Click += (s, e) =>
+            {
+                AddModpackToInstallation(inst);
+            };
+
+            this.Controls.Add(add);
+
+            Button back = new Button
+            {
+                Text = "Back",
+                Width = 200,
+                Height = 40,
+                Location = new Point(this.ClientSize.Width - 220, this.ClientSize.Height - 80)
+            };
+            StyleButton(back);
+
+            back.Click += (s, e) => RebuildMainUI();
+
+            this.Controls.Add(back);
+        }
+
+        private void ShowCreditMenu()
+        {
+            this.SuspendLayout();
+            this.Controls.Clear();
+
+            this.BackgroundImage = BytesToImage(Properties.Resources.Credits);
+            this.BackgroundImageLayout = ImageLayout.Stretch;
+
+            var exitBtn = new PictureBox
+            {
+                Image = BytesToImage(Properties.Resources.Back),
+                SizeMode = PictureBoxSizeMode.AutoSize,
+                BackColor = Color.Transparent,
+                Cursor = Cursors.Hand,
+                Location = new Point(639, 296)
+            };
+
+            exitBtn.Click += (s, e) => RebuildMainUI();
+
+            this.Controls.Add(exitBtn);
+
+            this.ResumeLayout(false);
+        }
+        private void ShowOptionsMenu()
+        {
+            this.SuspendLayout();
+            this.Controls.Clear();
+
+            var opts = LoadOptions();
+
+            Panel overlay = new Panel
+            {
+                BackgroundImage = BytesToImage(Properties.Resources.MenuOverlay),
+                BackgroundImageLayout = ImageLayout.Stretch,
+                Width = 280,
+                Height = 328,
+                BackColor = Color.Transparent,
+                Location = new Point(426, 9)
+            };
+
+            var lblLang = new Label
+            {
+                Text = "Language:",
+                ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
+                Location = new Point(486, 100),
+                AutoSize = true
+            };
+
+            this.Controls.Add(lblLang);
+
+            var langBox = new ComboBox
+            {
+                Location = new Point(486, 118),
+                Width = 160,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+
+            langBox.Items.Add("English");
+            langBox.SelectedItem = opts.Language;
+            this.Controls.Add(langBox);
+
+            var chkAutoUpdate = new CheckBox
+            {
+                Text = "Enable Auto Update",
+                ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
+                Location = new Point(486, 142),
+                Width = 160,
+                Checked = opts.AutoUpdate
+            };
+
+            chkAutoUpdate.CheckedChanged += (s, e) =>
+            {
+                if (!chkAutoUpdate.Checked)
+                {
+                    var result = MessageBox.Show(
+                        "Are you sure you want to disable Auto Update?\n\n" +
+                        "This ensures Launcher is up to date\n" +
+                        "Current versions of the game may no longer avalible to you",
+                        "Confirm",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning
+                    );
+
+                    if (result == DialogResult.No)
+                    {
+                        chkAutoUpdate.Checked = true;
+                    }
+                }
+            };
+
+            this.Controls.Add(chkAutoUpdate);
+
+            var btnChangeMusic = new Button
+            {
+                Text = "Change Music",
+                Width = 160,
+                Location = new Point(486, 169),
+                Font = new Font("Segoe UI", 12, FontStyle.Regular)
+            };
+            StyleButton(btnChangeMusic);
+
+            btnChangeMusic.Click += (s, e) =>
+            {
+                string resDir = EnsureResourceFolder(AppDomain.CurrentDomain.BaseDirectory);
+                string wavPath = Path.Combine(resDir, "Launcher_Music.wav");
+
+                var result = MessageBox.Show(
+                    "Do you want to restore the default launcher music?",
+                    "Music Options",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question
+                );
+
+                bool changed = false;
+
+                if (result == DialogResult.Yes)
+                {
+                    if (File.Exists(wavPath))
+                        File.Delete(wavPath);
+
+                    changed = true;
+                }
+                else
+                {
+                    using (var dialog = new OpenFileDialog())
+                    {
+                        dialog.Filter = "WAV Files (*.wav)|*.wav";
+                        dialog.Title = "Select Launcher Music";
+
+                        if (dialog.ShowDialog() == DialogResult.OK)
+                        {
+                            File.Copy(dialog.FileName, wavPath, overwrite: true);
+                            changed = true;
+                        }
+                    }
+                }
+
+                if (!changed)
+                    return;
+
+                var restart = MessageBox.Show(
+                    "The launcher needs to restart to apply music changes.\nRestart now?",
+                    "Restart Required",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Information
+                );
+
+                if (restart == DialogResult.Yes)
+                {
+                    Process.Start(Application.ExecutablePath);
+                }
+            };
+
+            this.Controls.Add(btnChangeMusic);
+
+            var saveBtn = new Button
+            {
+                Text = "Save",
+                Width = 214,
+                Height = 52,
+                Location = new Point(459, 274)
+            };
+            StyleButton(saveBtn);
+
+            saveBtn.Click += (s, e) =>
+            {
+                opts.Language = langBox.SelectedItem.ToString();
+                opts.AutoUpdate = chkAutoUpdate.Checked;
+                SaveOptions(opts);
+                MessageBox.Show("Options saved.");
+                RebuildMainUI();
+            };
+
+            this.Controls.Add(saveBtn);
+
+            saveBtn.Parent.Controls.Add(overlay);
+            overlay.SendToBack();
+
+            this.ResumeLayout(false);
+        }
         private void btnPatch_Click(object sender, EventArgs e)
         {
             if (string.IsNullOrEmpty(currentDirectory))
@@ -2048,7 +2967,7 @@ namespace PVZF_Launcher
             else
                 PatchGame();
 
-            UpdatePatchButtonState();
+            UpdatePatchButtonImage();
         }
 
         private void SafeMove(string source, string destDir)
@@ -2105,33 +3024,39 @@ namespace PVZF_Launcher
 
             try
             {
-                string disabledMelon = Path.Combine(currentDirectory, "_DISABLED_MELONLOADER");
-                string disabledBep = Path.Combine(currentDirectory, "_DISABLED_BEPINEX");
-
                 bool restored = false;
 
-                if (inst.LoaderType == "MelonLoader" && Directory.Exists(disabledMelon))
+                if (inst.LoaderType == "MelonLoader")
                 {
-                    foreach (var dir in Directory.GetDirectories(disabledMelon))
-                        SafeMoveDirectory(dir, currentDirectory);
+                    string disabled = Path.Combine(currentDirectory, "_DISABLED_MELONLOADER");
 
-                    foreach (var file in Directory.GetFiles(disabledMelon))
-                        SafeMove(file, currentDirectory);
+                    if (Directory.Exists(disabled))
+                    {
+                        foreach (var dir in Directory.GetDirectories(disabled))
+                            SafeMoveDirectory(dir, currentDirectory);
 
-                    Directory.Delete(disabledMelon, true);
-                    restored = true;
+                        foreach (var file in Directory.GetFiles(disabled))
+                            SafeMove(file, currentDirectory);
+
+                        Directory.Delete(disabled, true);
+                        restored = true;
+                    }
                 }
-
-                if (inst.LoaderType == "BepInEx" && Directory.Exists(disabledBep))
+                else if (inst.LoaderType == "BepInEx")
                 {
-                    foreach (var dir in Directory.GetDirectories(disabledBep))
-                        SafeMoveDirectory(dir, currentDirectory);
+                    string disabled = Path.Combine(currentDirectory, "_DISABLED_BEPINEX");
 
-                    foreach (var file in Directory.GetFiles(disabledBep))
-                        SafeMove(file, currentDirectory);
+                    if (Directory.Exists(disabled))
+                    {
+                        foreach (var dir in Directory.GetDirectories(disabled))
+                            SafeMoveDirectory(dir, currentDirectory);
 
-                    Directory.Delete(disabledBep, true);
-                    restored = true;
+                        foreach (var file in Directory.GetFiles(disabled))
+                            SafeMove(file, currentDirectory);
+
+                        Directory.Delete(disabled, true);
+                        restored = true;
+                    }
                 }
 
                 if (!restored)
@@ -2140,15 +3065,12 @@ namespace PVZF_Launcher
                         ExtractMelonLoader(currentDirectory);
                     else if (inst.LoaderType == "BepInEx")
                         ExtractBepInEx(currentDirectory);
-                    else
-                    {
-                        MessageBox.Show("Unknown loader type.");
-                        return;
-                    }
                 }
 
                 RefreshInstallationMetadata(inst);
+                SaveInstallationInfo(inst);
                 SaveInstallPaths();
+
                 MessageBox.Show("Game patched successfully.");
             }
             catch (Exception ex)
@@ -2156,7 +3078,6 @@ namespace PVZF_Launcher
                 MessageBox.Show("Patch failed: " + ex.Message);
             }
         }
-
         private void UnpatchGame(string path)
         {
             var inst = installPaths.FirstOrDefault(
@@ -2171,34 +3092,35 @@ namespace PVZF_Launcher
 
             try
             {
-                string melonDir = Path.Combine(path, "MelonLoader");
-                if (Directory.Exists(melonDir))
+                if (inst.LoaderType == "MelonLoader")
                 {
                     string disabled = Path.Combine(path, "_DISABLED_MELONLOADER");
+                    Directory.CreateDirectory(disabled);
 
-                    SafeMoveDirectory(melonDir, disabled);
+                    SafeMoveDirectory(Path.Combine(path, "MelonLoader"), disabled);
                     SafeMoveDirectory(Path.Combine(path, "Mods"), disabled);
                     SafeMoveDirectory(Path.Combine(path, "Plugins"), disabled);
                     SafeMoveDirectory(Path.Combine(path, "UserData"), disabled);
                     SafeMoveDirectory(Path.Combine(path, "UserLibs"), disabled);
 
                     SafeMove(Path.Combine(path, "version.dll"), disabled);
+                    SafeMove(Path.Combine(path, "InstallationInfo.json"), disabled);
                 }
-
-                string bepDir = Path.Combine(path, "BepInEx");
-                if (Directory.Exists(bepDir))
+                else if (inst.LoaderType == "BepInEx")
                 {
                     string disabled = Path.Combine(path, "_DISABLED_BEPINEX");
+                    Directory.CreateDirectory(disabled);
 
-                    SafeMoveDirectory(bepDir, disabled);
+                    SafeMoveDirectory(Path.Combine(path, "BepInEx"), disabled);
 
-                    SafeMove(Path.Combine(path, ".doorstop_version"), disabled);
-                    SafeMove(Path.Combine(path, "changelog.txt"), disabled);
-                    SafeMove(Path.Combine(path, "doorstop_config.ini"), disabled);
                     SafeMove(Path.Combine(path, "winhttp.dll"), disabled);
+                    SafeMove(Path.Combine(path, "doorstop_config.ini"), disabled);
+                    SafeMove(Path.Combine(path, ".doorstop_version"), disabled);
+                    SafeMove(Path.Combine(path, "InstallationInfo.json"), disabled);
                 }
 
                 RefreshInstallationMetadata(inst);
+                SaveInstallationInfo(inst);
                 SaveInstallPaths();
 
                 MessageBox.Show("Game unpatched successfully.");
@@ -2208,7 +3130,6 @@ namespace PVZF_Launcher
                 MessageBox.Show("Unpatch failed: " + ex.Message);
             }
         }
-
         private void btnLaunch_Click(object sender, EventArgs e)
         {
             if (string.IsNullOrEmpty(currentDirectory))
@@ -2261,6 +3182,40 @@ namespace PVZF_Launcher
             {
                 MessageBox.Show("Failed to launch: " + ex.Message);
             }
+        }
+
+        private void btnModPacks_Click(object sender, EventArgs e)
+        {
+            var inst = installPaths.FirstOrDefault(
+                i => string.Equals(i.Path, currentDirectory, StringComparison.OrdinalIgnoreCase)
+            );
+
+            if (inst == null)
+            {
+                MessageBox.Show("Installation not found. Add one first.");
+                return;
+            }
+
+            ShowModpackManager(inst);
+        }
+
+        private void btnCommunity_Click(object sender, EventArgs e)
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "https://discord.com/invite/DPAC5ZVJ8T",
+                UseShellExecute = true
+            });
+        }
+
+        private void btnCredit_Click(object sender, EventArgs e)
+        {
+            ShowCreditMenu();
+        }
+
+        private void btnOption_Click(object sender, EventArgs e)
+        {
+            ShowOptionsMenu();
         }
 
         private void btnQuit_Click(object sender, EventArgs e)

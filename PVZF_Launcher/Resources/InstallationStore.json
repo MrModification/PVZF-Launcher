@@ -3,19 +3,25 @@
   "Versions": [
     {
       "Version": "3.2.1",
-      "DownloadUrl": "https://drive.usercontent.google.com/download?id=1kLMln-z_EFrGVv96729B2xMqBOl51MnX&export=download"
+      "DownloadUrl": "https://github.com/MrModification/PVZF-Mirrors/releases/download/3.2.1/PC_PVZ-Fusion-3.2.1.zip",
+      "Net6DownloadUrl": "https://github.com/SillyStar-Github/PvZ-Fusion-DRPC/releases/download/interop/net6.zip",
+      "TranslationModDownloadUrl": "https://github.com/Teyliu/PVZF-Translation/archive/refs/heads/main.zip"
     },
     {
       "Version": "3.1.1",
-      "DownloadUrl": "https://drive.usercontent.google.com/download?id=1ijPum6sPics1iLGgSjJOMBwgRq9GUunL&export=download"
+      "DownloadUrl": "https://github.com/MrModification/PVZF-Mirrors/releases/download/3.1.1/PC_PVZ-Fusion-3.1.1.zip",
+      "Net6DownloadUrl": "https://github.com/SillyStar-Github/PvZ-Fusion-DRPC/releases/download/interop/net6.zip",
+      "TranslationModDownloadUrl": "https://github.com/Teyliu/PVZF-Translation/archive/refs/heads/main.zip"
     },
     {
       "Version": "3.0.1",
-      "DownloadUrl": "https://drive.usercontent.google.com/download?id=1v_0rK4ObsLmfXpW5fBFvaaz3vaD5TGEr&export=download"
+      "DownloadUrl": "https://github.com/MrModification/PVZF-Mirrors/releases/download/3.0.1/PC_PVZ-Fusion-3.0.1.zip",
+      "TranslationModDownloadUrl": "https://github.com/Teyliu/PVZF-Translation/archive/refs/heads/main.zip"
     },
     {
       "Version": "2.8.2",
-      "DownloadUrl": "https://drive.usercontent.google.com/download?id=1G5xq0mIGaYj3W8Mqku2d3j--Au-qdkp8&export=download"
+      "DownloadUrl": "https://github.com/MrModification/PVZF-Mirrors/releases/download/2.8.2/PC_PVZ-Fusion-2.8.2.zip",
+      "TranslationModDownloadUrl": "https://github.com/Teyliu/PVZF-Translation/archive/refs/heads/main.zip"
     }
   ]
 }
