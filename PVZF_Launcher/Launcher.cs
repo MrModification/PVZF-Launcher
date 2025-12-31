@@ -1,25 +1,17 @@
 ﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using PVZF_Launcher.Properties;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
-using System.Drawing.Text;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Reflection;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web;
 using System.Windows.Forms;
-using System.Windows.Forms.VisualStyles;
 
 namespace PVZF_Launcher
 {
@@ -34,6 +26,7 @@ namespace PVZF_Launcher
         private Panel packPanel;
 
         private string currentDirectory = "";
+        private readonly string launcherDirectory = AppDomain.CurrentDomain.BaseDirectory;
 
         private string installListFile;
 
@@ -41,6 +34,51 @@ namespace PVZF_Launcher
         {
             public string Language { get; set; } = "English";
             public bool AutoUpdate { get; set; } = true;
+        }
+
+        private async Task<string> DownloadWithSplashAsync(string url, string fileName)
+        {
+            string output = Path.Combine(Path.GetTempPath(), fileName);
+
+            Splash splash = new Splash("Starting download...");
+            splash.Show();
+
+            using (var client = new WebClient())
+            {
+                client.DownloadProgressChanged += (s, e) =>
+                {
+                    if (e.TotalBytesToReceive > 0)
+                    {
+                        splash.UpdateMessage(
+                            $"Do not close\n"
+                                + $"Downloading {fileName}\n"
+                                + $"{e.ProgressPercentage}%"
+                        );
+                    }
+                    else
+                    {
+                        splash.UpdateMessage(
+                            $"Do not close\n"
+                                + $"Downloading {fileName}\n"
+                                + $"(Server did not report file size)"
+                        );
+                    }
+                };
+
+                try
+                {
+                    await client.DownloadFileTaskAsync(new Uri(url), output);
+
+                    splash.UpdateMessage("Download complete!");
+                    await Task.Delay(500);
+                }
+                finally
+                {
+                    splash.Close();
+                }
+            }
+
+            return output;
         }
 
         private string GetOptionsPath()
@@ -81,6 +119,7 @@ namespace PVZF_Launcher
             public string Creator { get; set; }
             public string LoaderType { get; set; }
             public string SourceFile { get; set; }
+            public bool IsEnabled { get; set; } = true;
             public List<string> InstalledFiles { get; set; } = new List<string>();
         }
 
@@ -95,6 +134,9 @@ namespace PVZF_Launcher
             public DateTime LastPlayed { get; set; } = DateTime.MinValue;
             public string LoaderType { get; set; } = "MelonLoader";
             public List<ModPackInfo> InstalledModpacks { get; set; } = new List<ModPackInfo>();
+            public bool MetadataInitialized { get; set; }
+
+            public string Version { get; set; }
 
             private string _displayName;
 
@@ -120,6 +162,26 @@ namespace PVZF_Launcher
                     }
                 }
                 set { _displayName = value; }
+            }
+        }
+        private void CleanupEmptyDirectories(string root, string path)
+        {
+            string dir = Path.GetDirectoryName(path);
+
+            while (
+                !string.IsNullOrEmpty(dir)
+                && dir.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any())
+                {
+                    Directory.Delete(dir);
+                    dir = Path.GetDirectoryName(dir);
+                }
+                else
+                {
+                    break;
+                }
             }
         }
 
@@ -174,25 +236,32 @@ namespace PVZF_Launcher
                         )
                 );
 
-                string detectedLoader = null;
-
-                if (hasMelonMods)
-                    detectedLoader = "MelonLoader";
-
-                if (hasBepInEx)
-                    detectedLoader = "BepInEx";
-
-                if (detectedLoader == null)
+                if (!hasMelonMods && !hasBepInEx)
                     throw new Exception(
                         "Modpack must contain either GameDirectory/Mods/ or GameDirectory/BepInEx/."
                     );
 
-                if (!string.Equals(detectedLoader, loaderType, StringComparison.OrdinalIgnoreCase))
-                {
+                if (
+                    hasMelonMods
+                    && !hasBepInEx
+                    && !loaderType.Equals("MelonLoader", StringComparison.OrdinalIgnoreCase)
+                )
                     throw new Exception(
-                        $"This modpack is for {detectedLoader}, but this installation uses {loaderType}."
+                        "This modpack is for MelonLoader, but this installation uses "
+                            + loaderType
+                            + "."
                     );
-                }
+
+                if (
+                    hasBepInEx
+                    && !hasMelonMods
+                    && !loaderType.Equals("BepInEx", StringComparison.OrdinalIgnoreCase)
+                )
+                    throw new Exception(
+                        "This modpack is for BepInEx, but this installation uses "
+                            + loaderType
+                            + "."
+                    );
 
                 string jsonText;
                 using (var reader = new StreamReader(modpackJsonEntry.Open()))
@@ -265,43 +334,76 @@ namespace PVZF_Launcher
 
         public void InstallModpack(InstallationInfo inst, ModPackInfo pack)
         {
-            string tempDir = Path.Combine(Path.GetTempPath(), "modpack_extract_" + Guid.NewGuid());
-            Directory.CreateDirectory(tempDir);
+            string modsRoot = Path.Combine(inst.Path, "Mods");
+            Directory.CreateDirectory(modsRoot);
 
-            ZipFile.ExtractToDirectory(pack.SourceFile, tempDir);
+            string downloadsRoot = Path.Combine(modsRoot, "ModDownloads");
+            Directory.CreateDirectory(downloadsRoot);
 
-            foreach (var file in pack.InstalledFiles)
+            string sandbox = Path.Combine(downloadsRoot, "ModpackTemp_" + Guid.NewGuid());
+            Directory.CreateDirectory(sandbox);
+
+            ZipFile.ExtractToDirectory(pack.SourceFile, sandbox);
+
+            string gameDir = Path.Combine(sandbox, "GameDirectory");
+            if (!Directory.Exists(gameDir))
+                throw new InvalidOperationException("Modpack is missing GameDirectory folder.");
+
+            bool isBepInEx = inst.LoaderType.Equals("BepInEx", StringComparison.OrdinalIgnoreCase);
+            bool isMelon = inst.LoaderType.Equals(
+                "MelonLoader",
+                StringComparison.OrdinalIgnoreCase
+            );
+
+            List<string> installedFiles = new List<string>();
+
+            foreach (var file in Directory.GetFiles(gameDir, "*", SearchOption.AllDirectories))
             {
-                string src = Path.Combine(tempDir, "GameDirectory", file);
-                string dst = Path.Combine(inst.Path, file);
+                string relative = file.Substring(gameDir.Length + 1).Replace("\\", "/");
+
+                if (isBepInEx && relative.StartsWith("Mods/", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (isMelon && relative.StartsWith("BepInEx/", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (relative.Contains(".."))
+                    continue;
+
+                string dst = Path.Combine(inst.Path, relative);
 
                 Directory.CreateDirectory(Path.GetDirectoryName(dst));
-                File.Copy(src, dst, true);
+                File.Copy(file, dst, true);
+
+                installedFiles.Add(relative);
             }
+
+            pack.InstalledFiles = installedFiles;
 
             inst.InstalledModpacks.Add(pack);
             inst.ModCount = inst.InstalledModpacks.Count;
 
             SaveInstallationInfo(inst);
 
-            Directory.Delete(tempDir, true);
+            if (Directory.Exists(sandbox))
+                Directory.Delete(sandbox, true);
         }
 
         public void UninstallModpack(InstallationInfo inst, ModPackInfo pack)
         {
-            string baseDir = inst.Path;
+            string baseGameDir = inst.Path;
 
             if (inst.LoaderType == "MelonLoader")
             {
                 string disabled = Path.Combine(inst.Path, "_DISABLED_MELONLOADER");
                 if (Directory.Exists(disabled))
-                    baseDir = disabled;
+                    baseGameDir = disabled;
             }
             else if (inst.LoaderType == "BepInEx")
             {
                 string disabled = Path.Combine(inst.Path, "_DISABLED_BEPINEX");
                 if (Directory.Exists(disabled))
-                    baseDir = disabled;
+                    baseGameDir = disabled;
             }
 
             var protectedFiles = inst.InstalledModpacks
@@ -314,9 +416,12 @@ namespace PVZF_Launcher
                 if (protectedFiles.Contains(file))
                     continue;
 
-                string full = Path.Combine(baseDir, file);
+                string full = Path.Combine(baseGameDir, file);
                 if (File.Exists(full))
+                {
                     File.Delete(full);
+                    CleanupEmptyDirectories(inst.Path, full);
+                }
             }
 
             inst.InstalledModpacks.Remove(pack);
@@ -340,7 +445,32 @@ namespace PVZF_Launcher
                 {
                     ModPackInfo pack = ValidateModpack(modpackZip, inst.LoaderType);
 
-                    pack.InstalledFiles = GetModpackFileList(modpackZip);
+                    string tempDir = Path.Combine(
+                        Path.GetTempPath(),
+                        "modpack_extract_" + Guid.NewGuid()
+                    );
+                    Directory.CreateDirectory(tempDir);
+
+                    ZipFile.ExtractToDirectory(modpackZip, tempDir);
+
+                    string gameDir = Path.Combine(tempDir, "GameDirectory");
+                    if (!Directory.Exists(gameDir))
+                        throw new Exception("Modpack is missing GameDirectory after extraction.");
+
+                    pack.InstalledFiles = new List<string>();
+
+                    foreach (
+                        var file in Directory.GetFiles(gameDir, "*", SearchOption.AllDirectories)
+                    )
+                    {
+                        string relative = file.Substring(gameDir.Length + 1);
+                        string dst = Path.Combine(inst.Path, relative);
+
+                        Directory.CreateDirectory(Path.GetDirectoryName(dst));
+                        File.Copy(file, dst, true);
+
+                        pack.InstalledFiles.Add(relative);
+                    }
 
                     var conflicts = GetConflicts(inst, pack);
                     if (conflicts.Count > 0)
@@ -367,6 +497,57 @@ namespace PVZF_Launcher
                     MessageBox.Show("Failed to install modpack:\n" + ex.Message);
                 }
             }
+        }
+
+        public void DisableModpack(InstallationInfo inst, ModPackInfo pack)
+        {
+            string disabledDir = Path.Combine(inst.Path, "_DISABLED_" + inst.LoaderType.ToUpper());
+            Directory.CreateDirectory(disabledDir);
+
+            foreach (var file in pack.InstalledFiles)
+            {
+                string src = Path.Combine(inst.Path, file);
+                string dst = Path.Combine(disabledDir, file);
+
+                if (File.Exists(src))
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(dst));
+                    if (File.Exists(dst))
+                        File.Delete(dst);
+
+                    Directory.CreateDirectory(Path.GetDirectoryName(dst));
+                    File.Move(src, dst);
+                    CleanupEmptyDirectories(inst.Path, src);
+                }
+            }
+
+            pack.IsEnabled = false;
+            SaveInstallationInfo(inst);
+        }
+
+        public void EnableModpack(InstallationInfo inst, ModPackInfo pack)
+        {
+            string disabledDir = Path.Combine(inst.Path, "_DISABLED_" + inst.LoaderType.ToUpper());
+
+            foreach (var file in pack.InstalledFiles)
+            {
+                string src = Path.Combine(disabledDir, file);
+                string dst = Path.Combine(inst.Path, file);
+
+                if (File.Exists(src))
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(dst));
+                    if (File.Exists(dst))
+                        File.Delete(dst);
+
+                    Directory.CreateDirectory(Path.GetDirectoryName(dst));
+                    File.Move(src, dst);
+                    CleanupEmptyDirectories(inst.Path, src);
+                }
+            }
+
+            pack.IsEnabled = true;
+            SaveInstallationInfo(inst);
         }
 
         private void StyleButton(Button btn)
@@ -425,11 +606,11 @@ namespace PVZF_Launcher
 
         private void LoadBackgroundImage()
         {
-            string resDir = Path.Combine(currentDirectory, "PVZFL_Resources");
+            string resDir = Path.Combine(launcherDirectory, "PVZFL_Resources");
             string imagePath = Path.Combine(resDir, "Background.png");
 
             if (!File.Exists(imagePath))
-                UnpackBackground(currentDirectory);
+                UnpackBackground(launcherDirectory);
             try
             {
                 this.BackgroundImage = Image.FromFile(imagePath);
@@ -464,7 +645,7 @@ namespace PVZF_Launcher
 
         private Image LoadButtonFromFile(string fileName)
         {
-            string path = Path.Combine(currentDirectory, "PVZFL_Resources", fileName);
+            string path = Path.Combine(launcherDirectory, "PVZFL_Resources", fileName);
 
             for (int i = 0; i < 5; i++)
             {
@@ -612,36 +793,36 @@ namespace PVZF_Launcher
 
         private void LoadButtons()
         {
-            UnpackButtonImage(currentDirectory, "Launch.png", Properties.Resources.Launch);
-            UnpackButtonImage(currentDirectory, "Unpatch.png", Properties.Resources.Unpatch);
-            UnpackButtonImage(currentDirectory, "Patch.png", Properties.Resources.Patch);
-            UnpackButtonImage(currentDirectory, "ModPacks.png", Properties.Resources.ModPacks);
+            UnpackButtonImage(launcherDirectory, "Launch.png", Properties.Resources.Launch);
+            UnpackButtonImage(launcherDirectory, "Unpatch.png", Properties.Resources.Unpatch);
+            UnpackButtonImage(launcherDirectory, "Patch.png", Properties.Resources.Patch);
+            UnpackButtonImage(launcherDirectory, "ModPacks.png", Properties.Resources.ModPacks);
             UnpackButtonImage(
-                currentDirectory,
+                launcherDirectory,
                 "ManageInstalls.png",
                 Properties.Resources.ManageInstalls
             );
             UnpackButtonImage(
-                currentDirectory,
+                launcherDirectory,
                 "CreateInstall.png",
                 Properties.Resources.CreateInstall
             );
             UnpackButtonImage(
-                currentDirectory,
+                launcherDirectory,
                 "CommunityServer.png",
                 Properties.Resources.Discord
             );
             UnpackButtonImage(
-                currentDirectory,
+                launcherDirectory,
                 "CreditPlant.png",
                 Properties.Resources.CreditPlant
             );
             UnpackButtonImage(
-                currentDirectory,
+                launcherDirectory,
                 "OptionPlant.png",
                 Properties.Resources.OptionPlant
             );
-            UnpackButtonImage(currentDirectory, "QuitPlant.png", Properties.Resources.QuitPlant);
+            UnpackButtonImage(launcherDirectory, "QuitPlant.png", Properties.Resources.QuitPlant);
 
             canvas.AddButton(
                 new LauncherButton
@@ -737,9 +918,24 @@ namespace PVZF_Launcher
 
             LoadInstallPaths();
             AutoDetectAndRegisterInstallation();
+            Task.Run(
+                () =>
+                {
+                    foreach (var inst in installPaths)
+                    {
+                        inst.MetadataInitialized = false;
+                        RefreshInstallationMetadata(inst);
+                    }
+
+                    SaveInstallPaths();
+                }
+            );
+
             SelectDefaultInstallation();
             UpdateBrowseButtonImage();
             UpdatePatchButtonImage();
+
+            RebuildMainUI();
         }
 
         private void InitializeComponent()
@@ -863,6 +1059,30 @@ namespace PVZF_Launcher
 
             return root;
         }
+        private string GetGameExe(string path)
+        {
+            if (!Directory.Exists(path))
+                return null;
+
+            return Directory
+                .GetFiles(path, "*.exe", SearchOption.AllDirectories)
+                .FirstOrDefault(
+                    f =>
+                    {
+                        string lower = Path.GetFileName(f).ToLowerInvariant();
+                        return !lower.Contains("unity")
+                            && !lower.Contains("crash")
+                            && !lower.Contains("mono")
+                            && !lower.Contains("install");
+                    }
+                );
+        }
+        private string GetGameRoot(string path)
+        {
+            string exe = GetGameExe(path);
+            return exe == null ? null : Path.GetDirectoryName(exe);
+        }
+
         private bool IsValidVersionZip(string versionZip)
         {
             try
@@ -1090,68 +1310,198 @@ namespace PVZF_Launcher
             }
         }
 
-        private void InstallTranslationMod(string translationZip, string installPath)
+        public static string MakeRelativePath(string basePath, string fullPath)
         {
+            Uri baseUri = new Uri(basePath.EndsWith("\\") ? basePath : basePath + "\\");
+            Uri fullUri = new Uri(fullPath);
+            return Uri.UnescapeDataString(
+                baseUri.MakeRelativeUri(fullUri).ToString().Replace('/', '\\')
+            );
+        }
+
+        public void InstallTranslationMod(
+            string translationZip,
+            string installPath,
+            InstallationInfo inst
+        )
+        {
+            string modsRoot = Path.Combine(installPath, "Mods");
+            Directory.CreateDirectory(modsRoot);
+
+            string downloadsRoot = Path.Combine(modsRoot, "ModDownloads");
+            Directory.CreateDirectory(downloadsRoot);
+
+            string sandbox = Path.Combine(downloadsRoot, "TranslatorTemp_" + Guid.NewGuid());
+            Directory.CreateDirectory(sandbox);
+
+            ZipFile.ExtractToDirectory(translationZip, sandbox);
+
             string translatorFolderPath = null;
 
-            using (ZipArchive zip = ZipFile.OpenRead(translationZip))
+            foreach (var file in Directory.GetFiles(sandbox, "*", SearchOption.AllDirectories))
             {
-                foreach (var entry in zip.Entries)
+                if (file.EndsWith("PvZ_Fusion_Translator.dll", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (
-                        entry.FullName.EndsWith(
-                            "PvZ_Fusion_Translator.dll",
-                            StringComparison.OrdinalIgnoreCase
-                        )
-                    )
-                    {
-                        string parent = Path.GetDirectoryName(entry.FullName);
-                        if (parent == null)
-                            parent = "";
-
-                        translatorFolderPath = parent.Replace("\\", "/");
-                        break;
-                    }
-                }
-
-                if (translatorFolderPath == null)
-                    throw new InvalidOperationException(
-                        "Invalid TranslationMod.zip – PvZ_Fusion_Translator.dll not found."
-                    );
-
-                string modsFolder = Path.Combine(installPath, "Mods");
-                if (!Directory.Exists(modsFolder))
-                    Directory.CreateDirectory(modsFolder);
-
-                foreach (var entry in zip.Entries)
-                {
-                    string full = entry.FullName.Replace("\\", "/");
-
-                    if (!full.StartsWith(translatorFolderPath, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    string relative = full.Substring(translatorFolderPath.Length)
-                        .TrimStart('/', '\\');
-                    if (relative.Length == 0)
-                        continue;
-
-                    string outPath = Path.Combine(modsFolder, relative);
-
-                    if (full.EndsWith("/"))
-                    {
-                        if (!Directory.Exists(outPath))
-                            Directory.CreateDirectory(outPath);
-                    }
-                    else
-                    {
-                        string dir = Path.GetDirectoryName(outPath);
-                        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                            Directory.CreateDirectory(dir);
-
-                        entry.ExtractToFile(outPath, true);
-                    }
+                    translatorFolderPath = Path.GetDirectoryName(file);
+                    break;
                 }
             }
+
+            if (translatorFolderPath == null)
+                throw new InvalidOperationException(
+                    "Invalid TranslationMod.zip – PvZ_Fusion_Translator.dll not found."
+                );
+
+            List<string> installedFiles = new List<string>();
+
+            foreach (
+                var file in Directory.GetFiles(
+                    translatorFolderPath,
+                    "*",
+                    SearchOption.AllDirectories
+                )
+            )
+            {
+                string relative = file.Substring(translatorFolderPath.Length + 1)
+                    .Replace("\\", "/");
+                string outPath = Path.Combine(modsRoot, relative);
+
+                Directory.CreateDirectory(Path.GetDirectoryName(outPath));
+                File.Copy(file, outPath, true);
+
+                installedFiles.Add(MakeRelativePath(installPath, outPath));
+            }
+
+            var pack = new ModPackInfo
+            {
+                Name = "PvZ_Fusion_Translator",
+                Creator = "Blooms",
+                LoaderType = inst.LoaderType,
+                SourceFile = translationZip,
+                InstalledFiles = installedFiles,
+                IsEnabled = true
+            };
+
+            inst.InstalledModpacks.Add(pack);
+            inst.ModCount = inst.InstalledModpacks.Count;
+
+            SaveInstallationInfo(inst);
+
+            if (Directory.Exists(sandbox))
+                Directory.Delete(sandbox, true);
+
+            if (File.Exists(translationZip))
+                File.Delete(translationZip);
+        }
+
+        public async Task InstallModManager(string installPath, InstallationInfo inst)
+        {
+            string apiUrl = "https://api.github.com/repos/MrModification/PVZF-ModManager/releases";
+
+            JArray releases;
+            using (var client = new HttpClient())
+            {
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("PVZF-Installer");
+                string json = await client.GetStringAsync(apiUrl);
+                releases = JArray.Parse(json);
+            }
+
+            var release = releases.FirstOrDefault(
+                r =>
+                    string.Equals(
+                        (string)r["tag_name"],
+                        inst.Version,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+            );
+
+            if (release == null)
+            {
+                MessageBox.Show(
+                    $"Mod Manager is not available for version {inst.Version}.",
+                    "Not Available",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information
+                );
+                return;
+            }
+
+            var asset = release["assets"]?.FirstOrDefault();
+            if (asset == null)
+            {
+                MessageBox.Show(
+                    $"Mod Manager release for version {inst.Version} has no downloadable assets.",
+                    "Invalid Release",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+                return;
+            }
+
+            string downloadUrl = (string)asset["browser_download_url"];
+            string fileName = (string)asset["name"];
+
+            string zipPath = await DownloadWithSplashAsync(downloadUrl, fileName);
+
+            string modsRoot = Path.Combine(installPath, "Mods");
+            Directory.CreateDirectory(modsRoot);
+
+            string downloadsRoot = Path.Combine(modsRoot, "ModDownloads");
+            Directory.CreateDirectory(downloadsRoot);
+
+            string sandbox = Path.Combine(downloadsRoot, "ModManagerTemp_" + Guid.NewGuid());
+            Directory.CreateDirectory(sandbox);
+
+            ZipFile.ExtractToDirectory(zipPath, sandbox);
+
+            List<string> installedFiles = new List<string>();
+
+            bool isBepInEx = inst.LoaderType.Equals("BepInEx", StringComparison.OrdinalIgnoreCase);
+            bool isMelon = inst.LoaderType.Equals(
+                "MelonLoader",
+                StringComparison.OrdinalIgnoreCase
+            );
+
+            foreach (var file in Directory.GetFiles(sandbox, "*", SearchOption.AllDirectories))
+            {
+                string relative = file.Substring(sandbox.Length + 1).Replace("\\", "/");
+
+                if (isBepInEx && relative.StartsWith("Mods/", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (isMelon && relative.StartsWith("BepInEx/", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string outPath = Path.Combine(installPath, relative);
+
+                Directory.CreateDirectory(Path.GetDirectoryName(outPath));
+                File.Copy(file, outPath, true);
+
+                installedFiles.Add(MakeRelativePath(installPath, outPath));
+            }
+
+            var pack = new ModPackInfo
+            {
+                Name = "PVZF-Mod-Manager",
+                Creator = "MrModification",
+                LoaderType = inst.LoaderType,
+                InstalledFiles = installedFiles,
+                SourceFile = zipPath,
+                IsEnabled = true
+            };
+
+            inst.InstalledModpacks.Add(pack);
+            inst.ModCount = inst.InstalledModpacks.Count;
+
+            SaveInstallationInfo(inst);
+
+            if (Directory.Exists(sandbox))
+                Directory.Delete(sandbox, true);
+
+            if (File.Exists(zipPath))
+                File.Delete(zipPath);
+
+            MessageBox.Show("Mod Manager installed successfully!");
         }
 
         bool RequiresNet6(string versionString)
@@ -1160,14 +1510,109 @@ namespace PVZF_Launcher
             return v >= new Version("3.1.1");
         }
 
-        private void CreateNewInstallationFromLocalZip(
+        private bool IsSafeToDelete(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return false;
+
+            string full = Path.GetFullPath(path).TrimEnd('\\');
+            string root = Path.GetPathRoot(full).TrimEnd('\\');
+
+            if (string.Equals(full, root, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            string[] forbidden =
+            {
+                Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+            };
+
+            foreach (var f in forbidden)
+            {
+                if (string.Equals(full, f.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+
+            string exe = GetGameExe(path);
+            if (exe == null)
+                return false;
+
+            return true;
+        }
+        private void UninstallInstallation(InstallationInfo inst)
+        {
+            var result = MessageBox.Show(
+                $"Are you sure you want to uninstall the installation:\n\n{inst.DisplayName}\n\n"
+                    + "This will permanently delete the entire installation folder, including all mods and modpacks.",
+                "Confirm Uninstall Installation",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning
+            );
+
+            if (result != DialogResult.Yes)
+                return;
+
+            try
+            {
+                string gameRoot = GetGameRoot(inst.Path);
+
+                if (gameRoot == null)
+                {
+                    MessageBox.Show(
+                        "Unable to locate a valid game installation. Aborting uninstall."
+                    );
+                    return;
+                }
+
+                gameRoot = Path.GetFullPath(gameRoot).TrimEnd('\\');
+
+                if (!IsSafeToDelete(gameRoot))
+                {
+                    MessageBox.Show(
+                        "The resolved installation path appears unsafe. Aborting uninstall."
+                    );
+                    return;
+                }
+
+                var confirm = MessageBox.Show(
+                    $"The following folder will be permanently deleted:\n\n{gameRoot}\n\n"
+                        + "Are you absolutely sure?",
+                    "Final Confirmation",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning
+                );
+
+                if (confirm != DialogResult.Yes)
+                    return;
+
+                if (Directory.Exists(gameRoot))
+                    Directory.Delete(gameRoot, true);
+
+                installPaths.Remove(inst);
+                installPaths.RemoveAll(i => !Directory.Exists(i.Path));
+
+                SaveInstallPaths();
+
+                MessageBox.Show("Installation uninstalled successfully.");
+                RebuildMainUI();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Failed to uninstall installation:\n" + ex.Message);
+            }
+        }
+
+        private async Task CreateNewInstallationFromLocalZip(
             string version,
             string loader,
             string zipPath,
             string modpackZipPath,
             string language,
             string selectedNet6Zip,
-            string selectedTranslationZip
+            string selectedTranslationZip,
+            bool installModManager
         )
         {
             try
@@ -1189,35 +1634,15 @@ namespace PVZF_Launcher
                     return;
                 }
 
-                if (loader == "MelonLoader")
-                {
-                    ExtractMelonLoader(installPath);
-                }
-                else if (loader == "BepInEx")
-                {
-                    ExtractBepInEx(installPath);
-                }
+                InstallationInfo inst =
+                    LoadInstallationInfo(installPath) ?? CreateInstallationInfo(installPath);
 
-                if (!string.IsNullOrEmpty(modpackZipPath))
-                {
-                    ModPackInfo pack = ValidateModpack(modpackZipPath, loader);
-                    pack.InstalledFiles = GetModpackFileList(modpackZipPath);
-                    InstallationInfo inst =
-                        LoadInstallationInfo(installPath) ?? CreateInstallationInfo(installPath);
-                    var conflicts = GetConflicts(inst, pack);
-                    if (conflicts.Count > 0)
-                    {
-                        string preview = string.Join("\n", conflicts.Take(20));
-                        MessageBox.Show(
-                            $"Warning: This modpack overwrites {conflicts.Count} files:\n\n{preview}",
-                            "Modpack Conflict",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Warning
-                        );
-                    }
-                    InstallModpack(inst, pack);
-                    SaveInstallationInfo(inst);
-                }
+                inst.Version = version;
+
+                if (loader == "MelonLoader")
+                    ExtractMelonLoader(installPath);
+                else if (loader == "BepInEx")
+                    ExtractBepInEx(installPath);
 
                 bool languageChanged = false;
 
@@ -1232,12 +1657,7 @@ namespace PVZF_Launcher
                     if (File.Exists(cfgPath))
                     {
                         List<string> lines = File.ReadAllLines(cfgPath).ToList();
-                        int index = lines.FindIndex(
-                            delegate (string l)
-                            {
-                                return l.Trim() == "[PvZ_Fusion_Translator]";
-                            }
-                        );
+                        int index = lines.FindIndex(l => l.Trim() == "[PvZ_Fusion_Translator]");
 
                         if (index != -1)
                         {
@@ -1309,6 +1729,7 @@ namespace PVZF_Launcher
                                 return;
                             }
                         }
+
                         if (
                             string.IsNullOrEmpty(selectedTranslationZip)
                             || !IsValidTranslationModZip(selectedTranslationZip)
@@ -1322,28 +1743,61 @@ namespace PVZF_Launcher
                             );
                             return;
                         }
+
                         if (RequiresNet6(version))
-                        {
                             InstallNet6(selectedNet6Zip, installPath);
-                        }
-                        InstallTranslationMod(selectedTranslationZip, installPath);
+
+                        InstallTranslationMod(selectedTranslationZip, installPath, inst);
                     }
                 }
 
-                bool exists = false;
-                foreach (var i in installPaths)
+                if (installModManager == true)
                 {
-                    if (string.Equals(i.Path, installPath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        exists = true;
-                        break;
-                    }
+                    await InstallModManager(installPath, inst);
                 }
+
+                if (!string.IsNullOrEmpty(modpackZipPath))
+                {
+                    ModPackInfo pack = ValidateModpack(modpackZipPath, loader);
+
+                    var conflicts = GetConflicts(inst, pack);
+                    if (conflicts.Count > 0)
+                    {
+                        string preview = string.Join("\n", conflicts.Take(20));
+
+                        var result = MessageBox.Show(
+                            $"Warning: This modpack will overwrite {conflicts.Count} files:\n\n{preview}\n\n"
+                                + "Do you want to continue?",
+                            "Modpack Conflict",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Warning
+                        );
+
+                        if (result == DialogResult.No)
+                            return;
+                    }
+                    else
+                    {
+                        var result = MessageBox.Show(
+                            $"Install modpack '{pack.Name}'?",
+                            "Confirm Installation",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Question
+                        );
+
+                        if (result == DialogResult.No)
+                            return;
+                    }
+                    InstallModpack(inst, pack);
+                    SaveInstallationInfo(inst);
+                }
+                bool exists = installPaths.Any(
+                    i => string.Equals(i.Path, installPath, StringComparison.OrdinalIgnoreCase)
+                );
 
                 if (!exists)
                 {
-                    var info = CreateInstallationInfo(installPath);
-                    installPaths.Add(info);
+                    installPaths.Add(inst);
                     SaveInstallPaths();
                 }
 
@@ -1355,6 +1809,7 @@ namespace PVZF_Launcher
                 MessageBox.Show("Installation failed:\n" + ex.Message);
             }
         }
+
         private void ExtractMelonLoader(string installDir)
         {
             string temp = Path.Combine(installDir, "ml.zip");
@@ -1374,20 +1829,33 @@ namespace PVZF_Launcher
         private void AutoDetectAndRegisterInstallation()
         {
             string auto = AutoDetectGameDirectoryFromLog();
-            if (string.IsNullOrEmpty(auto))
+            if (string.IsNullOrWhiteSpace(auto))
                 return;
 
-            if (
-                !installPaths.Any(
-                    i => string.Equals(i.Path, auto, StringComparison.OrdinalIgnoreCase)
-                )
-            )
+            string root = GetGameRoot(auto);
+            if (root == null)
+                return;
+
+            string normalized = Path.GetFullPath(root).TrimEnd('\\');
+
+            bool exists = installPaths.Any(
+                i =>
+                    string.Equals(
+                        Path.GetFullPath(i.Path).TrimEnd('\\'),
+                        normalized,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+            );
+
+            if (!exists)
             {
-                var info = CreateInstallationInfo(auto);
+                var info = CreateInstallationInfo(normalized);
+                info.MetadataInitialized = true;
                 installPaths.Add(info);
                 SaveInstallPaths();
             }
         }
+
         private void LoadInstallPaths()
         {
             try
@@ -1402,16 +1870,14 @@ namespace PVZF_Launcher
 
                 foreach (var inst in installPaths)
                 {
-                    RefreshInstallationMetadata(inst);
                     var info = LoadInstallationInfo(inst.Path);
                     if (info != null)
                     {
                         inst.InstalledModpacks = info.InstalledModpacks ?? new List<ModPackInfo>();
-                        inst.ModCount = info.ModCount;
-                        inst.LoaderType = info.LoaderType;
                         inst.LastPlayed = info.LastPlayed;
                     }
                 }
+
                 SaveInstallPaths();
             }
             catch
@@ -1432,74 +1898,92 @@ namespace PVZF_Launcher
 
         private InstallationInfo CreateInstallationInfo(string path)
         {
-            var info = new InstallationInfo { Path = path };
+            string root = GetGameRoot(path);
+            if (root == null)
+                return null;
+
+            var info = new InstallationInfo { Path = root };
             RefreshInstallationMetadata(info);
             return info;
         }
 
         private void RefreshInstallationMetadata(InstallationInfo info)
         {
-            if (info == null || string.IsNullOrEmpty(info.Path))
+            if (info == null || string.IsNullOrWhiteSpace(info.Path))
+                return;
+
+            if (info.MetadataInitialized)
                 return;
 
             try
             {
-                string exe = Directory.Exists(info.Path)
-                    ? Directory.GetFiles(info.Path, "*.exe").FirstOrDefault()
-                    : null;
+                string root = GetGameRoot(info.Path);
+                if (root == null)
+                {
+                    info.ExeName = "";
+                    info.LoaderType = "";
+                    info.ModCount = 0;
+                    info.IsPatched = false;
+                    return;
+                }
+
+                string exe = GetGameExe(root);
                 info.ExeName = exe != null ? Path.GetFileName(exe) : "";
 
-                info.IsPatched = IsPatched(info.Path);
+                info.IsPatched = IsPatched(root);
 
-                if (string.IsNullOrEmpty(info.LoaderType))
+                string type = GetPatchType(root);
+                if (!string.IsNullOrEmpty(type))
                 {
-                    string type = GetPatchType(info.Path);
-
                     if (type == "Melon")
                         info.LoaderType = "MelonLoader";
                     else if (type == "Bep")
                         info.LoaderType = "BepInEx";
                 }
 
-                info.ModCount = CountMods(info.Path, info.LoaderType);
+                info.ModCount = CountMods(root, info.LoaderType);
             }
             catch
             {
-                info.LoaderType = "";
                 info.ExeName = "";
+                info.LoaderType = "";
                 info.ModCount = 0;
                 info.IsPatched = false;
             }
+            info.MetadataInitialized = true;
         }
 
-        private int CountMods(string installPath, string loaderType)
+        private int CountMods(string root, string loaderType)
         {
             try
             {
-                string modsDir;
-
-                if (string.Equals(loaderType, "BepInEx", StringComparison.OrdinalIgnoreCase))
-                {
-                    modsDir = Path.Combine(installPath, "BepInEx", "Plugins");
-                }
-                else
-                {
-                    modsDir = Path.Combine(installPath, "Mods");
-                }
-
-                if (!Directory.Exists(modsDir))
+                string realRoot = GetGameRoot(root);
+                if (realRoot == null)
                     return 0;
 
-                var dllFiles = Directory
-                    .GetFiles(modsDir, "*.dll", SearchOption.AllDirectories)
-                    .Select(Path.GetFileName);
+                string modsPath = null;
 
-                if (string.Equals(loaderType, "BepInEx", StringComparison.OrdinalIgnoreCase))
-                    return dllFiles.Count();
+                if (loaderType == "BepInEx")
+                    modsPath = Path.Combine(realRoot, "BepInEx", "Plugins");
+                else
+                    modsPath = Path.Combine(realRoot, "Mods");
 
-                var corePattern = new Regex(@"^_\d+_", RegexOptions.IgnoreCase);
+                if (!Directory.Exists(modsPath))
+                    return 0;
 
-                return dllFiles.Count(name => !corePattern.IsMatch(name));
+                var dlls = Directory.GetFiles(modsPath, "*.dll", SearchOption.AllDirectories);
+
+                int count = 0;
+
+                foreach (var dll in dlls)
+                {
+                    if (dll.Contains("_DISABLED_"))
+                        continue;
+
+                    count++;
+                }
+
+                return count;
             }
             catch
             {
@@ -1509,51 +1993,50 @@ namespace PVZF_Launcher
 
         private bool IsPatched(string installPath)
         {
-            try
-            {
-                if (Directory.Exists(Path.Combine(installPath, "MelonLoader")))
-                    return true;
-                if (File.Exists(Path.Combine(installPath, "version.dll")))
-                    return true;
-
-                if (Directory.Exists(Path.Combine(installPath, "BepInEx")))
-                    return true;
-                if (File.Exists(Path.Combine(installPath, "winhttp.dll")))
-                    return true;
-                if (File.Exists(Path.Combine(installPath, "doorstop_config.ini")))
-                    return true;
-
+            string root = GetGameRoot(installPath);
+            if (root == null)
                 return false;
-            }
-            catch
-            {
-                return false;
-            }
+
+            if (Directory.Exists(Path.Combine(root, "MelonLoader")))
+                return true;
+            if (File.Exists(Path.Combine(root, "version.dll")))
+                return true;
+
+            if (Directory.Exists(Path.Combine(root, "BepInEx")))
+                return true;
+            if (File.Exists(Path.Combine(root, "winhttp.dll")))
+                return true;
+            if (File.Exists(Path.Combine(root, "doorstop_config.ini")))
+                return true;
+
+            return false;
         }
 
         private string GetPatchType(string installPath)
         {
+            string root = GetGameRoot(installPath);
+            if (root == null)
+                return "No";
             try
             {
-                string melon = Path.Combine(installPath, "MelonLoader");
-                string bepin = Path.Combine(installPath, "BepInEx");
-
-                if (Directory.Exists(melon))
+                if (Directory.Exists(Path.Combine(root, "MelonLoader")))
                     return "Melon";
 
-                if (Directory.Exists(bepin))
+                if (Directory.Exists(Path.Combine(root, "BepInEx")))
                     return "Bep";
 
-                return "false";
+                return "No";
             }
             catch
             {
-                return "false";
+                return "No";
             }
         }
 
         private void SelectDefaultInstallation()
         {
+            installPaths.RemoveAll(i => !Directory.Exists(i.Path));
+
             if (installPaths.Count == 0)
             {
                 currentDirectory = "";
@@ -1825,6 +2308,13 @@ namespace PVZF_Launcher
                     return;
                 }
 
+                string realRoot = GetGameRoot(newPath);
+                if (realRoot == null)
+                {
+                    MessageBox.Show("No valid game executable found in the selected directory.");
+                    return;
+                }
+
                 string oldLoaderType = inst.LoaderType;
                 string newLoaderType = comboLoader.SelectedItem.ToString();
 
@@ -1835,27 +2325,28 @@ namespace PVZF_Launcher
                 );
 
                 inst.DisplayName = newName;
-                inst.Path = newPath;
-
-                currentDirectory = newPath;
+                inst.Path = realRoot;
+                currentDirectory = realRoot;
 
                 if (loaderChanged)
                 {
-                    if (IsPatched(inst.Path) == true)
+                    if (IsPatched(realRoot))
                     {
-                        MessageBox.Show("Please unpatch first");
+                        MessageBox.Show("Please unpatch first.");
                     }
                     else
                     {
-                        MessageBox.Show("Loader type changed, you can now patch");
+                        MessageBox.Show("Loader type changed. You can now patch.");
                         inst.LoaderType = newLoaderType;
                     }
                 }
 
+                inst.MetadataInitialized = false;
                 RefreshInstallationMetadata(inst);
+
                 SaveInstallationInfo(inst);
                 SaveInstallPaths();
-                LoadInstallPaths();
+
                 ShowInstallationManager();
             };
             this.Controls.Add(btnSave);
@@ -1907,8 +2398,6 @@ namespace PVZF_Launcher
 
             foreach (var inst in installPaths.ToList())
             {
-                RefreshInstallationMetadata(inst);
-
                 Panel row = new Panel
                 {
                     Height = 70,
@@ -1930,7 +2419,7 @@ namespace PVZF_Launcher
                 var lblMeta = new Label
                 {
                     Text =
-                        $"Name: {inst.DisplayName} | Mods: {inst.ModCount} | Patched: {GetPatchType(inst.Path)} | Last Played: {lastPlayedText}",
+                        $"Name: {inst.DisplayName} | Mods: {inst.ModCount} | Patched: {GetPatchType(GetGameRoot(inst.Path))} | Last Played: {lastPlayedText}",
                     ForeColor = Color.LightGray,
                     Location = new Point(10, 25),
                     AutoSize = true
@@ -1988,9 +2477,42 @@ namespace PVZF_Launcher
 
                 btnRemove.Click += (s, e) =>
                 {
-                    installPaths.Remove(inst);
-                    SaveInstallPaths();
-                    ShowInstallationManager();
+                    var result = MessageBox.Show(
+                        "Do you want to completely uninstall this installation,\n"
+                            + "or just remove it from your launcher list?\n\n"
+                            + "Yes = Uninstall installation\n"
+                            + "No = Remove from list only\n"
+                            + "Cancel = Do nothing",
+                        "Remove Installation",
+                        MessageBoxButtons.YesNoCancel,
+                        MessageBoxIcon.Question
+                    );
+
+                    if (result == DialogResult.Cancel)
+                        return;
+
+                    if (result == DialogResult.No)
+                    {
+                        installPaths.Remove(inst);
+                        SaveInstallPaths();
+                        ShowInstallationManager();
+                        return;
+                    }
+
+                    if (result == DialogResult.Yes)
+                    {
+                        try
+                        {
+                            UninstallInstallation(inst);
+                            installPaths.Remove(inst);
+                            SaveInstallPaths();
+                            ShowInstallationManager();
+                        }
+                        catch (Exception ex)
+                        {
+                            MessageBox.Show("Failed to uninstall installation:\n" + ex.Message);
+                        }
+                    }
                 };
 
                 btnMods.Click += (s, e) =>
@@ -2039,6 +2561,8 @@ namespace PVZF_Launcher
                 };
             }
 
+            var store = LoadInstallationStore();
+
             Button add = new Button
             {
                 Text = "+ Add Installation",
@@ -2056,13 +2580,95 @@ namespace PVZF_Launcher
                     if (dialog.ShowDialog() == DialogResult.OK)
                     {
                         string path = dialog.SelectedPath;
+                        string root = GetGameRoot(path);
+
+                        if (root == null)
+                        {
+                            MessageBox.Show(
+                                "No valid game executable found in this folder.",
+                                "Invalid Installation",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Error
+                            );
+                            return;
+                        }
+
                         if (
-                            !installPaths.Any(
-                                i => string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase)
+                            installPaths.Any(
+                                i =>
+                                    string.Equals(
+                                        Path.GetFullPath(i.Path).TrimEnd('\\'),
+                                        Path.GetFullPath(root).TrimEnd('\\'),
+                                        StringComparison.OrdinalIgnoreCase
+                                    )
                             )
                         )
                         {
-                            var info = CreateInstallationInfo(path);
+                            MessageBox.Show(
+                                "This installation is already added.",
+                                "Duplicate Installation",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Information
+                            );
+                            return;
+                        }
+
+                        using (var versionDialog = new Form())
+                        {
+                            versionDialog.Text = "Select Game Version";
+                            versionDialog.Size = new Size(350, 180);
+                            versionDialog.StartPosition = FormStartPosition.CenterParent;
+                            versionDialog.FormBorderStyle = FormBorderStyle.FixedDialog;
+                            versionDialog.MaximizeBox = false;
+                            versionDialog.MinimizeBox = false;
+
+                            Label lbl = new Label
+                            {
+                                Text = "Choose the version for this installation:",
+                                AutoSize = true,
+                                Location = new Point(15, 15)
+                            };
+                            versionDialog.Controls.Add(lbl);
+
+                            ComboBox versionBox = new ComboBox
+                            {
+                                DropDownStyle = ComboBoxStyle.DropDownList,
+                                Location = new Point(15, 45),
+                                Width = 300
+                            };
+
+                            if (store != null && store.Versions.Count > 0)
+                            {
+                                foreach (var entry in store.Versions)
+                                    versionBox.Items.Add(entry.Version);
+                            }
+
+                            versionBox.Items.Add("Other");
+
+                            if (versionBox.Items.Count > 0)
+                                versionBox.SelectedIndex = 0;
+
+                            versionDialog.Controls.Add(versionBox);
+
+                            Button ok = new Button
+                            {
+                                Text = "OK",
+                                DialogResult = DialogResult.OK,
+                                Location = new Point(15, 85),
+                                Width = 300
+                            };
+                            versionDialog.Controls.Add(ok);
+
+                            versionDialog.AcceptButton = ok;
+
+                            if (versionDialog.ShowDialog() != DialogResult.OK)
+                                return;
+
+                            string selectedVersion = versionBox.SelectedItem.ToString();
+
+                            var info = CreateInstallationInfo(root);
+                            info.Version = selectedVersion;
+
                             installPaths.Add(info);
                             SaveInstallPaths();
                             ShowInstallationManager();
@@ -2072,7 +2678,6 @@ namespace PVZF_Launcher
             };
             this.Controls.Add(add);
 
-            var store = LoadInstallationStore();
             if (store != null && store.Versions.Count > 0)
             {
                 Button download = new Button
@@ -2108,36 +2713,6 @@ namespace PVZF_Launcher
             };
             this.Controls.Add(back);
         }
-
-        private async Task<string> DownloadWithSplashAsync(string url, string fileName)
-        {
-            string output = Path.Combine(Path.GetTempPath(), fileName);
-
-            using (var client = new WebClient())
-            {
-                Splash splash = new Splash("Starting download...");
-                splash.Show();
-
-                client.DownloadProgressChanged += (s, e) =>
-                {
-                    splash.UpdateMessage(
-                        $"Do not close\n May still be downloading at 0% \n Downloading {fileName}\n{e.ProgressPercentage}%"
-                    );
-                };
-
-                client.DownloadFileCompleted += (s, e) =>
-                {
-                    splash.UpdateMessage("Download complete!");
-                    Task.Delay(500).Wait();
-                    splash.Close();
-                };
-
-                await client.DownloadFileTaskAsync(new Uri(url), output);
-            }
-
-            return output;
-        }
-
         private string SelectValidVersionZip()
         {
             while (true)
@@ -2399,6 +2974,7 @@ namespace PVZF_Launcher
                             if (!exists)
                             {
                                 var info = CreateInstallationInfo(path);
+                                info.MetadataInitialized = false;
                                 installPaths.Add(info);
                                 SaveInstallPaths();
                             }
@@ -2608,14 +3184,24 @@ namespace PVZF_Launcher
                     return;
                 }
 
-                CreateNewInstallationFromLocalZip(
+                var modmgr = MessageBox.Show(
+                    "Would you like to install Mod Manager/Store as part of this installation?",
+                    "Install Mod Manager",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question
+                );
+
+                bool installModManager = (modmgr == DialogResult.Yes);
+
+                await CreateNewInstallationFromLocalZip(
                     version,
                     loader,
                     selectedVersionZip,
                     selectedModpackZip,
                     language,
                     selectedNet6Zip,
-                    selectedTranslationZip
+                    selectedTranslationZip,
+                    installModManager
                 );
             };
 
@@ -2657,6 +3243,182 @@ namespace PVZF_Launcher
             this.PerformLayout();
         }
 
+        private string GetPackSize(
+            List<string> installedFiles,
+            string installRoot,
+            string loaderType
+        )
+        {
+            if (installedFiles == null || installedFiles.Count == 0)
+                return "0 B";
+
+            long totalBytes = 0;
+
+            string disabledRoot = Path.Combine(installRoot, "_DISABLED_" + loaderType.ToUpper());
+
+            foreach (var relative in installedFiles)
+            {
+                try
+                {
+                    string enabledPath = Path.Combine(installRoot, relative);
+                    string disabledPath = Path.Combine(disabledRoot, relative);
+
+                    if (File.Exists(enabledPath))
+                        totalBytes += new FileInfo(enabledPath).Length;
+                    else if (File.Exists(disabledPath))
+                        totalBytes += new FileInfo(disabledPath).Length;
+                }
+                catch { }
+            }
+
+            double size = totalBytes;
+
+            if (size < 1024)
+                return $"{size:0} B";
+            size /= 1024;
+
+            if (size < 1024)
+                return $"{size:0.0} KB";
+            size /= 1024;
+
+            if (size < 1024)
+                return $"{size:0.0} MB";
+            size /= 1024;
+
+            return $"{size:0.00} GB";
+        }
+
+        private void ShowModListForPack(InstallationInfo inst, ModPackInfo pack)
+        {
+            this.Controls.Clear();
+            this.BackgroundImage = BytesToImage(Properties.Resources.Menu);
+            this.BackgroundImageLayout = ImageLayout.Stretch;
+            string sizeText = GetPackSize(
+                pack.InstalledFiles,
+                GetGameRoot(inst.Path),
+                inst.LoaderType
+            );
+
+            Label title = new Label
+            {
+                Text = $"Mods in {pack.Name}  ({sizeText})",
+                ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
+                Font = new Font("Segoe UI", 14, FontStyle.Bold),
+                Location = new Point(20, 20),
+                AutoSize = true
+            };
+            this.Controls.Add(title);
+
+            Panel listPanel = new Panel
+            {
+                Location = new Point(20, 50),
+                Size = new Size(this.ClientSize.Width - 40, this.ClientSize.Height - 140),
+                AutoScroll = true,
+                BackColor = Color.FromArgb(30, 30, 30),
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            this.Controls.Add(listPanel);
+
+            var dlls = pack.InstalledFiles
+                .Where(f => f.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var dll in dlls)
+            {
+                Panel row = new Panel
+                {
+                    Height = 50,
+                    Dock = DockStyle.Top,
+                    BackColor = Color.FromArgb(50, 50, 50)
+                };
+
+                Label lbl = new Label
+                {
+                    Text = Path.GetFileName(dll),
+                    ForeColor = Color.White,
+                    Location = new Point(10, 15),
+                    AutoSize = true
+                };
+
+                Button toggle = new Button { Width = 120, Height = 30 };
+                StyleButton(toggle);
+
+                string fullPath = Path.Combine(inst.Path, dll);
+                string disabledPath = Path.Combine(
+                    inst.Path,
+                    "_DISABLED_" + inst.LoaderType.ToUpper(),
+                    dll
+                );
+
+                bool isEnabled = File.Exists(fullPath);
+
+                if (isEnabled)
+                {
+                    toggle.Text = "Disable";
+                    toggle.BackColor = Color.DarkOrange;
+                }
+                else
+                {
+                    toggle.Text = "Enable";
+                    toggle.BackColor = Color.Green;
+                }
+
+                toggle.Click += (s, e) =>
+                {
+                    if (isEnabled)
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(disabledPath));
+                        if (File.Exists(disabledPath))
+                            File.Delete(disabledPath);
+                        File.Move(fullPath, disabledPath);
+
+                        CleanupEmptyDirectories(inst.Path, fullPath);
+                    }
+                    else
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(fullPath));
+                        if (File.Exists(fullPath))
+                            File.Delete(fullPath);
+                        File.Move(disabledPath, fullPath);
+
+                        string disabledRoot = Path.Combine(
+                            inst.Path,
+                            "_DISABLED_" + inst.LoaderType.ToUpper()
+                        );
+                        CleanupEmptyDirectories(disabledRoot, disabledPath);
+                    }
+
+                    ShowModListForPack(inst, pack);
+                };
+
+                row.Controls.Add(lbl);
+                row.Controls.Add(toggle);
+
+                toggle.Location = new Point(row.Width - toggle.Width - 10, 10);
+                row.Resize += (s, e) =>
+                {
+                    toggle.Left = row.Width - toggle.Width - 10;
+                };
+
+                listPanel.Controls.Add(row);
+                listPanel.Controls.SetChildIndex(row, 0);
+            }
+
+            Button back = new Button
+            {
+                Text = "Back",
+                Width = 200,
+                Height = 40,
+                Location = new Point(this.ClientSize.Width - 220, this.ClientSize.Height - 80)
+            };
+            StyleButton(back);
+
+            back.Click += (s, e) => ShowModpackManager(inst);
+
+            this.Controls.Add(back);
+        }
+
         private void ShowModpackManager(InstallationInfo inst)
         {
             this.Controls.Clear();
@@ -2684,57 +3446,136 @@ namespace PVZF_Launcher
             };
             this.Controls.Add(packPanel);
 
-            string disabledMelon = Path.Combine(inst.Path, "_DISABLED_MELONLOADER");
-            string disabledBep = Path.Combine(inst.Path, "_DISABLED_BEPINEX");
-
             foreach (var pack in inst.InstalledModpacks.ToList())
             {
-                bool isDisabled =
-                    (pack.LoaderType == "MelonLoader" && Directory.Exists(disabledMelon))
-                    || (pack.LoaderType == "BepInEx" && Directory.Exists(disabledBep));
+                bool isDisabled = !pack.IsEnabled;
 
                 Panel row = new Panel
                 {
-                    Height = 60,
+                    Height = 80,
                     Dock = DockStyle.Top,
                     BackColor = Color.FromArgb(50, 50, 50)
                 };
 
-                string statusText = isDisabled ? " (DISABLED)" : "";
-                string loaderText = pack.LoaderType;
+                string sizeText = GetPackSize(
+                    pack.InstalledFiles,
+                    GetGameRoot(inst.Path),
+                    inst.LoaderType
+                );
 
                 Label lbl = new Label
                 {
                     Text =
-                        $"[{loaderText}] {pack.Name} by {pack.Creator} — {pack.InstalledFiles.Count} files{statusText}",
+                        $"[{pack.LoaderType}] {pack.Name} by {pack.Creator} — {pack.InstalledFiles.Count} files — {sizeText}"
+                        + (isDisabled ? " (DISABLED)" : ""),
                     ForeColor = isDisabled ? Color.Gray : Color.White,
                     Location = new Point(10, 10),
                     AutoSize = true
                 };
 
+                var dlls = pack.InstalledFiles
+                    .Where(f => f.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                    .Select(Path.GetFileName)
+                    .ToList();
+
+                string dllText;
+
+                if (dlls.Count == 0)
+                {
+                    dllText = "Mods: (none)";
+                }
+                else if (dlls.Count <= 2)
+                {
+                    dllText = "Mods: " + string.Join(", ", dlls);
+                }
+                else
+                {
+                    dllText = "Mods: " + string.Join(", ", dlls.Take(2)) + ", ...";
+                }
+
+                Label dllLabel = new Label
+                {
+                    Text = dllText,
+                    ForeColor = Color.LightGray,
+                    Location = new Point(10, 35),
+                    AutoSize = true
+                };
+
                 Button uninstall = new Button { Text = "Uninstall", Width = 120, Height = 35 };
                 StyleButton(uninstall);
+                uninstall.BackColor = Color.DarkRed;
 
+                uninstall.Enabled = !isDisabled;
                 if (isDisabled)
-                {
-                    uninstall.Enabled = false;
                     uninstall.BackColor = Color.FromArgb(80, 80, 80);
-                }
 
                 uninstall.Click += (s, e) =>
                 {
+                    var result = MessageBox.Show(
+                        $"Are you sure you want to uninstall '{pack.Name}'?\n\n"
+                            + "All files belonging to this modpack will be removed.",
+                        "Confirm Uninstall",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning
+                    );
+
+                    if (result != DialogResult.Yes)
+                        return;
+
                     UninstallModpack(inst, pack);
                     SaveInstallationInfo(inst);
                     ShowModpackManager(inst);
                 };
 
-                row.Controls.Add(lbl);
-                row.Controls.Add(uninstall);
+                Button toggle = new Button { Width = 120, Height = 35 };
+                StyleButton(toggle);
 
-                uninstall.Location = new Point(row.Width - uninstall.Width - 10, 12);
+                if (pack.IsEnabled)
+                {
+                    toggle.Text = "Disable";
+                    toggle.BackColor = Color.DarkOrange;
+                }
+                else
+                {
+                    toggle.Text = "Enable";
+                    toggle.BackColor = Color.Green;
+                }
+
+                toggle.Click += (s, e) =>
+                {
+                    if (pack.IsEnabled)
+                        DisableModpack(inst, pack);
+                    else
+                        EnableModpack(inst, pack);
+
+                    SaveInstallationInfo(inst);
+                    ShowModpackManager(inst);
+                };
+
+                Button manage = new Button { Text = "Manage Mods", Width = 120, Height = 35 };
+                StyleButton(manage);
+
+                manage.Click += (s, e) =>
+                {
+                    ShowModListForPack(inst, pack);
+                };
+
+                row.Controls.Add(lbl);
+                row.Controls.Add(dllLabel);
+                row.Controls.Add(uninstall);
+                row.Controls.Add(manage);
+                row.Controls.Add(toggle);
+
+                int buttonY = 35;
+                uninstall.Location = new Point(row.Width - uninstall.Width - 10, buttonY);
+                manage.Location = new Point(row.Width - manage.Width - 270, buttonY);
+                toggle.Location = new Point(row.Width - toggle.Width - 140, buttonY);
+
                 row.Resize += (s, e) =>
                 {
                     uninstall.Left = row.Width - uninstall.Width - 10;
+                    toggle.Left = row.Width - toggle.Width - 140;
+                    manage.Left = row.Width - manage.Width - 270;
                 };
 
                 packPanel.Controls.Add(row);
@@ -2749,7 +3590,7 @@ namespace PVZF_Launcher
                 Location = new Point(20, this.ClientSize.Height - 80)
             };
             StyleButton(add);
-            add.BackColor = Color.Green;
+            add.BackColor = Color.FromArgb(40, 120, 40);
 
             add.Click += (s, e) =>
             {
@@ -2770,6 +3611,30 @@ namespace PVZF_Launcher
             back.Click += (s, e) => RebuildMainUI();
 
             this.Controls.Add(back);
+
+            bool hasModManager = inst.InstalledModpacks.Any(p => p.Name == "PVZF-Mod-Manager");
+
+            if (!hasModManager)
+            {
+                Button installMM = new Button
+                {
+                    Text = "Install Mod Manager",
+                    Width = 200,
+                    Height = 40,
+                    Location = new Point(this.ClientSize.Width - 440, this.ClientSize.Height - 80)
+                };
+                StyleButton(installMM);
+
+                installMM.BackColor = Color.FromArgb(70, 130, 180);
+
+                installMM.Click += async (s, e) =>
+                {
+                    await InstallModManager(inst.Path, inst);
+                    ShowModpackManager(inst);
+                };
+
+                this.Controls.Add(installMM);
+            }
         }
 
         private void ShowCreditMenu()
@@ -2849,9 +3714,9 @@ namespace PVZF_Launcher
                 if (!chkAutoUpdate.Checked)
                 {
                     var result = MessageBox.Show(
-                        "Are you sure you want to disable Auto Update?\n\n" +
-                        "This ensures Launcher is up to date\n" +
-                        "Current versions of the game may no longer avalible to you",
+                        "Are you sure you want to disable Auto Update?\n\n"
+                            + "This ensures Launcher is up to date\n"
+                            + "Current versions of the game may no longer avalible to you",
                         "Confirm",
                         MessageBoxButtons.YesNo,
                         MessageBoxIcon.Warning
@@ -2977,17 +3842,30 @@ namespace PVZF_Launcher
                 if (!File.Exists(source))
                     return;
 
-                if (!Directory.Exists(destDir))
-                    Directory.CreateDirectory(destDir);
+                Directory.CreateDirectory(destDir);
 
                 string dest = Path.Combine(destDir, Path.GetFileName(source));
 
                 if (File.Exists(dest))
-                    File.Delete(dest);
+                {
+                    string backup = dest + ".backup_" + DateTime.Now.Ticks;
+                    File.Move(dest, backup);
+                }
 
-                File.Move(source, dest);
+                try
+                {
+                    File.Move(source, dest);
+                }
+                catch (IOException)
+                {
+                    File.Copy(source, dest, overwrite: true);
+                    File.Delete(source);
+                }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("SafeMove failed: " + ex.Message);
+            }
         }
 
         private void SafeMoveDirectory(string sourceDir, string destDir)
@@ -2997,17 +3875,46 @@ namespace PVZF_Launcher
                 if (!Directory.Exists(sourceDir))
                     return;
 
-                if (!Directory.Exists(destDir))
-                    Directory.CreateDirectory(destDir);
+                Directory.CreateDirectory(destDir);
 
                 string dest = Path.Combine(destDir, Path.GetFileName(sourceDir));
 
                 if (Directory.Exists(dest))
-                    Directory.Delete(dest, true);
+                {
+                    string backup = dest + "_backup_" + DateTime.Now.Ticks;
+                    Directory.Move(dest, backup);
+                }
 
-                Directory.Move(sourceDir, dest);
+                try
+                {
+                    Directory.Move(sourceDir, dest);
+                }
+                catch (IOException)
+                {
+                    CopyDirectory(sourceDir, dest);
+                    Directory.Delete(sourceDir, true);
+                }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("SafeMoveDirectory failed: " + ex.Message);
+            }
+        }
+
+        private void CopyDirectory(string sourceDir, string destDir)
+        {
+            Directory.CreateDirectory(destDir);
+
+            foreach (var file in Directory.GetFiles(sourceDir))
+            {
+                string dest = Path.Combine(destDir, Path.GetFileName(file));
+                File.Copy(file, dest, overwrite: true);
+            }
+            foreach (var dir in Directory.GetDirectories(sourceDir))
+            {
+                string dest = Path.Combine(destDir, Path.GetFileName(dir));
+                CopyDirectory(dir, dest);
+            }
         }
 
         private void PatchGame()
@@ -3022,21 +3929,28 @@ namespace PVZF_Launcher
                 return;
             }
 
+            string root = GetGameRoot(inst.Path);
+            if (root == null)
+            {
+                MessageBox.Show("Invalid installation directory.");
+                return;
+            }
+
             try
             {
                 bool restored = false;
 
                 if (inst.LoaderType == "MelonLoader")
                 {
-                    string disabled = Path.Combine(currentDirectory, "_DISABLED_MELONLOADER");
+                    string disabled = Path.Combine(root, "_DISABLED_MELONLOADER");
 
                     if (Directory.Exists(disabled))
                     {
                         foreach (var dir in Directory.GetDirectories(disabled))
-                            SafeMoveDirectory(dir, currentDirectory);
+                            SafeMoveDirectory(dir, root);
 
                         foreach (var file in Directory.GetFiles(disabled))
-                            SafeMove(file, currentDirectory);
+                            SafeMove(file, root);
 
                         Directory.Delete(disabled, true);
                         restored = true;
@@ -3044,15 +3958,15 @@ namespace PVZF_Launcher
                 }
                 else if (inst.LoaderType == "BepInEx")
                 {
-                    string disabled = Path.Combine(currentDirectory, "_DISABLED_BEPINEX");
+                    string disabled = Path.Combine(root, "_DISABLED_BEPINEX");
 
                     if (Directory.Exists(disabled))
                     {
                         foreach (var dir in Directory.GetDirectories(disabled))
-                            SafeMoveDirectory(dir, currentDirectory);
+                            SafeMoveDirectory(dir, root);
 
                         foreach (var file in Directory.GetFiles(disabled))
-                            SafeMove(file, currentDirectory);
+                            SafeMove(file, root);
 
                         Directory.Delete(disabled, true);
                         restored = true;
@@ -3062,12 +3976,14 @@ namespace PVZF_Launcher
                 if (!restored)
                 {
                     if (inst.LoaderType == "MelonLoader")
-                        ExtractMelonLoader(currentDirectory);
+                        ExtractMelonLoader(root);
                     else if (inst.LoaderType == "BepInEx")
-                        ExtractBepInEx(currentDirectory);
+                        ExtractBepInEx(root);
                 }
 
+                inst.MetadataInitialized = false;
                 RefreshInstallationMetadata(inst);
+
                 SaveInstallationInfo(inst);
                 SaveInstallPaths();
 
@@ -3078,6 +3994,7 @@ namespace PVZF_Launcher
                 MessageBox.Show("Patch failed: " + ex.Message);
             }
         }
+
         private void UnpatchGame(string path)
         {
             var inst = installPaths.FirstOrDefault(
@@ -3090,36 +4007,45 @@ namespace PVZF_Launcher
                 return;
             }
 
+            string root = GetGameRoot(inst.Path);
+            if (root == null)
+            {
+                MessageBox.Show("Invalid installation directory.");
+                return;
+            }
+
             try
             {
                 if (inst.LoaderType == "MelonLoader")
                 {
-                    string disabled = Path.Combine(path, "_DISABLED_MELONLOADER");
+                    string disabled = Path.Combine(root, "_DISABLED_MELONLOADER");
                     Directory.CreateDirectory(disabled);
 
-                    SafeMoveDirectory(Path.Combine(path, "MelonLoader"), disabled);
-                    SafeMoveDirectory(Path.Combine(path, "Mods"), disabled);
-                    SafeMoveDirectory(Path.Combine(path, "Plugins"), disabled);
-                    SafeMoveDirectory(Path.Combine(path, "UserData"), disabled);
-                    SafeMoveDirectory(Path.Combine(path, "UserLibs"), disabled);
+                    SafeMoveDirectory(Path.Combine(root, "MelonLoader"), disabled);
+                    SafeMoveDirectory(Path.Combine(root, "Mods"), disabled);
+                    SafeMoveDirectory(Path.Combine(root, "Plugins"), disabled);
+                    SafeMoveDirectory(Path.Combine(root, "UserData"), disabled);
+                    SafeMoveDirectory(Path.Combine(root, "UserLibs"), disabled);
 
-                    SafeMove(Path.Combine(path, "version.dll"), disabled);
-                    SafeMove(Path.Combine(path, "InstallationInfo.json"), disabled);
+                    SafeMove(Path.Combine(root, "version.dll"), disabled);
+                    SafeMove(Path.Combine(root, "InstallationInfo.json"), disabled);
                 }
                 else if (inst.LoaderType == "BepInEx")
                 {
-                    string disabled = Path.Combine(path, "_DISABLED_BEPINEX");
+                    string disabled = Path.Combine(root, "_DISABLED_BEPINEX");
                     Directory.CreateDirectory(disabled);
 
-                    SafeMoveDirectory(Path.Combine(path, "BepInEx"), disabled);
+                    SafeMoveDirectory(Path.Combine(root, "BepInEx"), disabled);
 
-                    SafeMove(Path.Combine(path, "winhttp.dll"), disabled);
-                    SafeMove(Path.Combine(path, "doorstop_config.ini"), disabled);
-                    SafeMove(Path.Combine(path, ".doorstop_version"), disabled);
-                    SafeMove(Path.Combine(path, "InstallationInfo.json"), disabled);
+                    SafeMove(Path.Combine(root, "winhttp.dll"), disabled);
+                    SafeMove(Path.Combine(root, "doorstop_config.ini"), disabled);
+                    SafeMove(Path.Combine(root, ".doorstop_version"), disabled);
+                    SafeMove(Path.Combine(root, "InstallationInfo.json"), disabled);
                 }
 
+                inst.MetadataInitialized = false;
                 RefreshInstallationMetadata(inst);
+
                 SaveInstallationInfo(inst);
                 SaveInstallPaths();
 
@@ -3130,9 +4056,10 @@ namespace PVZF_Launcher
                 MessageBox.Show("Unpatch failed: " + ex.Message);
             }
         }
+
         private void btnLaunch_Click(object sender, EventArgs e)
         {
-            if (string.IsNullOrEmpty(currentDirectory))
+            if (string.IsNullOrWhiteSpace(currentDirectory))
             {
                 MessageBox.Show("Select a directory first.");
                 return;
@@ -3146,30 +4073,25 @@ namespace PVZF_Launcher
 
             try
             {
-                string exe = Directory
-                    .GetFiles(currentDirectory, "*.exe", SearchOption.AllDirectories)
-                    .FirstOrDefault(
-                        f =>
-                        {
-                            string lower = Path.GetFileName(f).ToLowerInvariant();
-                            return !lower.Contains("unity")
-                                && !lower.Contains("crash")
-                                && !lower.Contains("mono")
-                                && !lower.Contains("install");
-                        }
-                    );
+                string exePath = GetGameExe(currentDirectory);
 
-                if (exe == null)
+                if (exePath == null)
                 {
                     MessageBox.Show("No valid game executable found in:\n" + currentDirectory);
                     return;
                 }
 
-                Process.Start(exe);
-                Application.Exit();
+                string gameRoot = Path.GetDirectoryName(exePath);
+
+                Process.Start(exePath);
 
                 var inst = installPaths.FirstOrDefault(
-                    i => string.Equals(i.Path, currentDirectory, StringComparison.OrdinalIgnoreCase)
+                    i =>
+                        string.Equals(
+                            Path.GetFullPath(i.Path).TrimEnd('\\'),
+                            Path.GetFullPath(gameRoot).TrimEnd('\\'),
+                            StringComparison.OrdinalIgnoreCase
+                        )
                 );
 
                 if (inst != null)
@@ -3177,17 +4099,31 @@ namespace PVZF_Launcher
                     inst.LastPlayed = DateTime.Now;
                     SaveInstallPaths();
                 }
+
+                Application.Exit();
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Failed to launch: " + ex.Message);
+                MessageBox.Show("Failed to launch:\n" + ex.Message);
             }
         }
 
         private void btnModPacks_Click(object sender, EventArgs e)
         {
+            string root = GetGameRoot(currentDirectory);
+            if (root == null)
+            {
+                MessageBox.Show("Invalid installation directory.");
+                return;
+            }
+
             var inst = installPaths.FirstOrDefault(
-                i => string.Equals(i.Path, currentDirectory, StringComparison.OrdinalIgnoreCase)
+                i =>
+                    string.Equals(
+                        Path.GetFullPath(i.Path).TrimEnd('\\'),
+                        Path.GetFullPath(root).TrimEnd('\\'),
+                        StringComparison.OrdinalIgnoreCase
+                    )
             );
 
             if (inst == null)
@@ -3201,11 +4137,13 @@ namespace PVZF_Launcher
 
         private void btnCommunity_Click(object sender, EventArgs e)
         {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "https://discord.com/invite/DPAC5ZVJ8T",
-                UseShellExecute = true
-            });
+            Process.Start(
+                new ProcessStartInfo
+                {
+                    FileName = "https://discord.com/invite/DPAC5ZVJ8T",
+                    UseShellExecute = true
+                }
+            );
         }
 
         private void btnCredit_Click(object sender, EventArgs e)

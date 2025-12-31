@@ -1,5 +1,4 @@
-﻿using System;
-using System.Drawing;
+﻿using System.Drawing;
 using System.Windows.Forms;
 
 public class Splash : Form
@@ -23,6 +22,7 @@ public class Splash : Form
             TextAlign = ContentAlignment.MiddleCenter,
             Dock = DockStyle.Fill
         };
+
 
         this.Controls.Add(lbl);
     }

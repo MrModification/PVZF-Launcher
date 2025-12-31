@@ -13,10 +13,6 @@ namespace PVZF_Launcher
     {
         internal static string ResourceDirectory;
 
-        private const string GitHubOwner = "MrModification";
-        private const string GitHubRepo = "PVZF-Launcher";
-        private const string GitHubExeName = "PVZF_Launcher.exe";
-
         [STAThread]
         static void Main()
         {
@@ -240,7 +236,7 @@ namespace PVZF_Launcher
                     client.DefaultRequestHeaders.UserAgent.ParseAdd("PVZF-Launcher");
 
                     string url =
-                        $"https://api.github.com/repos/{GitHubOwner}/{GitHubRepo}/releases/latest";
+                        "https://api.github.com/repos/MrModification/PVZF-Launcher/releases/latest";
                     string json = await client.GetStringAsync(url).ConfigureAwait(false);
 
                     JObject obj = JObject.Parse(json);
@@ -261,7 +257,7 @@ namespace PVZF_Launcher
                             if (
                                 string.Equals(
                                     name,
-                                    GitHubExeName,
+                                    "PVZF_Launcher.exe",
                                     StringComparison.OrdinalIgnoreCase
                                 )
                             )
