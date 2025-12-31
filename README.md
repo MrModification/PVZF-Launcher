@@ -33,6 +33,9 @@ The PvZ Fusion Launcher handles everything from file validation to mod loader in
 
 6. Click **Install** and let the launcher handle the rest.
 
+7. To Add Mod-Manager: 
+    - From main menu click "Mod Packs" 
+    - Click "Install Mod Manager"
 
 ---
 
