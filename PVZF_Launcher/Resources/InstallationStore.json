@@ -2,6 +2,12 @@
   "RootPath": "%Documents%/PlantsVsZombiesFusionInstalls",
   "Versions": [
     {
+      "Version": "3.3.1",
+      "DownloadUrl": "https://github.com/MrModification/PVZF-Mirrors/releases/download/3.3.1/PC_PVZ-Fusion-3.3.1.zip",
+      "Net6DownloadUrl": "https://github.com/SillyStar-Github/PvZ-Fusion-DRPC/releases/download/interop/net6.zip",
+      "TranslationModDownloadUrl": "https://github.com/Teyliu/PVZF-Translation/archive/refs/heads/main.zip"
+    },
+    {
       "Version": "3.2.1",
       "DownloadUrl": "https://github.com/MrModification/PVZF-Mirrors/releases/download/3.2.1/PC_PVZ-Fusion-3.2.1.zip",
       "Net6DownloadUrl": "https://github.com/SillyStar-Github/PvZ-Fusion-DRPC/releases/download/interop/net6.zip",
