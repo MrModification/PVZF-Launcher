@@ -141,7 +141,7 @@ namespace PVZF_Launcher.Properties {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to {&quot;RootPath&quot;:&quot;%Documents%/PlantsVsZombiesFusionInstalls&quot;,&quot;Versions&quot;:[{&quot;Version&quot;:&quot;3.3.1&quot;,&quot;DownloadUrl&quot;:&quot;https://github.com/MrModification/PVZF-Mirrors/releases/download/3.3.1/PC_PVZ-Fusion-3.3.1.zip&quot;,&quot;Net6DownloadUrl&quot;:&quot;https://github.com/SillyStar-Github/PvZ-Fusion-DRPC/releases/download/interop/net6.zip&quot;,&quot;TranslationModDownloadUrl&quot;:&quot;https://github.com/Teyliu/PVZF-Translation/archive/refs/heads/main.zip&quot;},{&quot;Version&quot;:&quot;3.2.1&quot;,&quot;DownloadUrl&quot;:&quot;https://github.com/MrModification/PVZF-Mirrors/releases/download/3.2.1/ [rest of string was truncated]&quot;;.
+        ///   Looks up a localized string similar to {&quot;RootPath&quot;:&quot;%Documents%/PlantsVsZombiesFusionInstalls&quot;,&quot;Versions&quot;:[{&quot;Version&quot;:&quot;3.4.1&quot;,&quot;DownloadUrl&quot;:&quot;https://github.com/MrModification/PVZF-Mirrors/releases/download/3.4.1/PC_PVZ-Fusion-3.4.1.zip&quot;,&quot;Net6DownloadUrl&quot;:&quot;https://github.com/SillyStar-Github/PvZ-Fusion-DRPC/releases/download/interop/net6.zip&quot;,&quot;TranslationModDownloadUrl&quot;:&quot;https://github.com/Teyliu/PVZF-Translation/archive/refs/heads/main.zip&quot;},{&quot;Version&quot;:&quot;3.3.1&quot;,&quot;DownloadUrl&quot;:&quot;https://github.com/MrModification/PVZF-Mirrors/releases/download/3.3.1/ [rest of string was truncated]&quot;;.
         /// </summary>
         internal static string InstallationStore {
             get {
